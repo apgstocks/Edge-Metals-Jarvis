@@ -109,6 +109,8 @@ function computeItem(it) {
     return {
         draws: normaliseDraws(it && it.draws),
         description: it.description || '',
+        // Ferrous / non-ferrous (2026-11-17); null = Unsorted. See helpers/itemMetal.js.
+        metal_type: require('./itemMetal').normType(it.metal_type),
         gross_weight: gross, tare_weight: tare, net_weight: net,
         // '' stays '' when it is pounds — see loads.js on why this is not
         // quietly migrated to 'lb' one row at a time.
@@ -210,7 +212,7 @@ function buildRecord(entry) {
     // must never grow into it.
     const _known = require('./itemSpelling').knownSpellings();
     const items = Array.isArray(entry.items)
-        ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
+        ? require('./itemMetal').fill(require('./itemSpelling').canonicaliseItems(entry.items, _known)).map(computeItem) : [];
     const totals = sumItems(items);
     return {
         date          : entry.date || null,
@@ -275,6 +277,7 @@ function buildRecord(entry) {
 
 async function addOutboundLoad(entry) {
     const rec = buildRecord(entry);
+    await require('./itemMetal').learnFromItems(rec.items);
     rec.id = null;
     rec.created_at = new Date().toISOString();
     rec.created_by = entry.created_by || 'unknown';
@@ -319,6 +322,7 @@ async function addOutboundLoad(entry) {
 
 async function editOutboundLoad(id, entry) {
     const patch = buildRecord(entry);
+    await require('./itemMetal').learnFromItems(patch.items);
     // ── AN EDIT MUST NOT UN-DELIVER A LOAD ───────────────────────────────
     // buildRecord rebuilds from a fixed field list, so anything it does not
     // name is wiped by the Object.assign below — the trap this file's own

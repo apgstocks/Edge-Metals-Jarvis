@@ -269,7 +269,8 @@ function mk(dir, o = {}) {
                 }
             }
         })(ROOT);
-        const allowed = new Set([path.join('helpers', 'disk', 'index.js'), path.join('scripts', 'notes.js')]);
+        // helpers/taughtRecall.js: wired with her yes (2026-11-15, "recall in decisions"); see tests/taught-recall.js.
+        const allowed = new Set([path.join('helpers', 'disk', 'index.js'), path.join('scripts', 'notes.js'), path.join('helpers', 'taughtRecall.js')]);
         assert.deepStrictEqual(hits.filter((h) => !allowed.has(h)), [], 'wired somewhere unexpected: it was agreed to ship this unwired');
     });
 

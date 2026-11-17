@@ -305,12 +305,19 @@ function loadCard(l) {
                as a per-pound rate and makes the Amount look like a mistake.
                A per-pound row is left exactly as it was — no suffix, no
                second figure. -->
+          <!-- 2026-11-17: net ton and gross ton are offered on the website
+               sale screen now (and always were in the phone app), so a sale
+               priced per ton shows its unit and the net in that unit too. An
+               unlabelled "800" beside "30000 lb" was the same misreading as
+               the per-MT case above. Divisors are the server's table
+               (helpers/priceUnits.js): MT 2204.62, net ton 2000, gross 2240. -->
           <tbody>${l.items.map((it) => {
-            const perMt = String(it.unit || '').trim().toLowerCase() === 'mt';
+            const TON = { mt: { d: 2204.62, lab: '/MT', abbr: 'MT' }, nt: { d: 2000, lab: '/net ton', abbr: 'net ton' }, gt: { d: 2240, lab: '/gross ton', abbr: 'gross ton' } };
+            const tn = TON[String(it.unit || '').trim().toLowerCase()] || null;
             const net = Number(it.net_weight);
             const netCell = (it.net_weight ?? '—') + ' ' + esc(l.weight_unit)
-              + (perMt && isFinite(net) ? ` <span style="opacity:.6;">= ${(net / 2204.62).toFixed(3)} MT</span>` : '');
-            const priceCell = (it.price ?? '—') + (perMt ? '/MT' : '');
+              + (tn && isFinite(net) ? ` <span style="opacity:.6;">= ${(net / tn.d).toFixed(3)} ${tn.abbr}</span>` : '');
+            const priceCell = (it.price ?? '—') + (tn ? tn.lab : '');
             return `<tr><td>${esc(it.description)}</td><td>${netCell}</td><td>${priceCell}</td><td>${fmtMoney(it.amount)}</td></tr>`;
           }).join('')}</tbody>
         </table>` : ''}

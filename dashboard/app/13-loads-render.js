@@ -147,10 +147,10 @@ function renderLoads(loads) {
          spreadsheet) beats forcing it back into multiple lines on mobile. */
       /* Price column went 70px -> 124px on 2026-09-24 to seat the /lb ÷ /MT
          select beside the rate. min-width follows it, 620 -> 674. */
-      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 124px 100px 62px; gap:6px; align-items:center; min-width:674px; }
+      .ld-item-header, .item-row { display:grid; grid-template-columns:0.9fr 120px 120px 92px 168px 100px 62px; gap:6px; align-items:center; min-width:718px; }
       .ld-item-price-inputs { display:flex; gap:4px; align-items:center; min-width:0; }
       .ld-item-price-inputs .ld-item-price { flex:1 1 auto; min-width:0; }
-      .ld-item-price-inputs .ld-item-unit { flex:0 0 auto; width:56px; padding:6px 2px; font-family:var(--font-mono); font-size:11px; }
+      .ld-item-price-inputs .ld-item-unit { flex:0 0 auto; width:86px; padding:6px 2px; font-family:var(--font-mono); font-size:11px; }
       .ld-item-header { font-family:var(--font-mono); font-size:9.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-muted); padding:0 2px 6px; }
       .item-row { margin-bottom:5px; }
       /* Payment badge. Shown only once something has been paid — see
@@ -1207,6 +1207,10 @@ function wireLoadsEvents() {
 
     const validationError = validateItemsBeforeSave(currentLoadItems);
     if (validationError) { $('loadModalErr').textContent = validationError; return; }
+    // 'Did you mean ...?' on the seller/buyer name (Apsara, 2026-11-15). Never blocks the save; see confirmPartyName.
+    await confirmPartyName();
+    // Ferrous / non-ferrous for any item row still without an answer (Apsara, 2026-11-17). Must be answered; see ensureAllMetal.
+    await ensureAllMetal();
 
     const btn = $('btnSaveLoad');
     const isEdit = !!editingLoadId;
@@ -1223,6 +1227,7 @@ function wireLoadsEvents() {
           tare_weight : (it.tare_weight ?? '') === '' ? 0 : it.tare_weight,
           price: it.price || null,
           unit : it.unit  || null,
+          metal_type: it.metal_type || null,
           gross_photo_base64: it.grossPhoto ? it.grossPhoto.base64 : null,
           gross_photo_mime  : it.grossPhoto ? it.grossPhoto.mime   : null,
           tare_photo_base64 : it.tarePhoto  ? it.tarePhoto.base64  : null,

@@ -426,6 +426,65 @@ function mount(app, cfg) {
         catch (e) { res.status(500).json({ error: e.message }); }
     });
 
+    // The names the "Name payer" box offers (Apsara, 2026-11-16: "it should show all my available customers in qb for
+    // matching"). Two sources, kept apart on purpose: `ledger` = customers with a sale in Jarvis, the ONLY ones a deposit
+    // can be matched to (see the note above `customers` in the match route); `qb` = customers read from the nightly
+    // QuickBooks snapshot, which holds only those with a balance or unapplied money, not every customer. A QB-only name
+    // is listed and marked, because remembering a payer as someone with no invoice here matches nothing.
+    app.get('/api/bank/payers', (req, res) => {
+        if (!admin(req, res)) return;
+        try {
+            const sales = require('./sales');
+            const { docs } = openReceivables(sales.listWithTotals());
+            const by = new Map();
+            for (const d of docs) {
+                if (!d.party) continue;
+                const e = by.get(d.party) || { name: d.party, ledger: true, qb: false, open: 0, openCount: 0 };
+                const left = round2(num0(d.amount) - num0(d.applied));
+                if (left > 0.005) { e.open = round2(e.open + left); e.openCount += 1; }
+                by.set(d.party, e);
+            }
+            const keyOf = (n) => require('./nameMatch').normalizeName(n);
+            const byKey = new Map([...by.values()].map((e) => [keyOf(e.name), e]));
+            let qbAt = null, qbRead = false;
+            try {
+                const snap = require('./quickbooks/snapshot').read();
+                if (snap && Array.isArray(snap.customers)) {
+                    qbRead = true; qbAt = snap.at || null;
+                    for (const c of snap.customers) {
+                        const name = String((c && c.name) || '').trim();
+                        if (!name) continue;
+                        const hit = byKey.get(keyOf(name));
+                        if (hit) { hit.qb = true; hit.qbName = name; continue; }
+                        const e = { name, ledger: false, qb: true, open: 0, openCount: 0 };
+                        by.set(name, e); byKey.set(keyOf(name), e);
+                    }
+                }
+            } catch (e) { /* no snapshot yet: the ledger names alone */ }
+            const customers = [...by.values()].sort((a, z) => (Number(z.ledger) - Number(a.ledger)) || a.name.localeCompare(z.name));
+            res.json({ customers, quickbooks: { read: qbRead, as_of: qbAt, note: 'only customers with a balance or unapplied money are in the snapshot' } });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // One customer's open invoices, for the "Find another invoice" box on a deposit (Apsara, 2026-11-16: "what if i want to
+    // search by invoice no/container"). Same open-invoice reading as the match route (openReceivables), so a balance
+    // here is the balance the matcher used. One customer only: a receipt is one customer's money (salesReceipts.js).
+    app.get('/api/bank/open-invoices', (req, res) => {
+        if (!admin(req, res)) return;
+        try {
+            const party = String(req.query.party || '').trim();
+            if (!party) return res.status(400).json({ error: 'whose invoices?' });
+            const key = require('./nameMatch').normalizeName(party);
+            const { docs } = openReceivables(require('./sales').listWithTotals());
+            const invoices = docs.filter((d) => require('./nameMatch').normalizeName(d.party) === key)
+                .map((d) => ({ id: d.id, label: d.label, invoice_no: d.invoice_no, container_no: d.container_no,
+                    booking_no: d.booking_no, item: d.item, date: d.date, amount: d.amount, applied: d.applied,
+                    balance: round2(num0(d.amount) - num0(d.applied)) }))
+                .sort((x, y) => String(x.date).localeCompare(String(y.date)));
+            res.json({ party, invoices });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     app.post('/api/bank/aliases', async (req, res) => {
         if (!admin(req, res)) return;
         const { descriptor, customer, why } = req.body || {};

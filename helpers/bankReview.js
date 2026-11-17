@@ -166,7 +166,13 @@ function fromWithdrawal(res) {
     // Apsara, 2026-10-13: "no way to tell/type what it is". Every withdrawal Jarvis
     // cannot tie to a record can be categorised from a list (helpers/bankEntries.js);
     // the list opens on a suggestion only where the wording is unambiguous.
-    const categorise = { suggested: require('./bankEntries').suggest(base.descriptor) };
+    // Her own earlier choices come first (bankEntries.learned), the fixed wording rules second. A suggestion either way.
+    const BEnt = require('./bankEntries');
+    let learnedPick = null;
+    try { learnedPick = BEnt.learned(base.descriptor); } catch (e) { learnedPick = null; }
+    const categorise = learnedPick
+        ? { suggested: learnedPick.account, learned: { times: learnedPick.times } }
+        : { suggested: BEnt.suggest(base.descriptor) };
     // `add` ONLY where a store will take the record. A recognised hauler
     // with no hand-add path is still named on the row — she gets to see
     // Jarvis knew what it was — but as `ask`, with where to go instead.

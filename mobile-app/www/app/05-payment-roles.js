@@ -166,6 +166,8 @@ function renderItemRows() {
           <input class="ld-item-desc-input" placeholder="Type description…" autocomplete="off" value="${esc(desc)}" data-prev="${esc(desc)}">
           <div class="ac-dropdown ld-desc-ac hidden"></div>
         </div>
+        <input type="hidden" class="ld-item-metal" value="${esc(it.metal_type || '')}" data-for="${esc(it.metal_type ? metalKey(desc) : '')}">
+        <button type="button" class="ld-metal-chip" style="display:none; background:none; border:none; padding:2px 0 0; font-size:10.5px; text-align:left; cursor:pointer; text-decoration:underline;"></button>
       </div>
       <div class="ld-item-cap ld-item-cap-gross">
         <span class="ld-mobile-label">Gross</span>
@@ -375,7 +377,13 @@ function renderItemRows() {
       setTimeout(close, 150);
       applyPriceIfChanged();
       syncItemsFromDom();
+      // Ferrous or non-ferrous, as soon as they move to the next box. Deferred a beat so a tap on a suggestion
+      // (which fills the box) lands first.
+      setTimeout(() => { ensureRowMetal(row, false); }, 250);
     });
+    const metalChip = row.querySelector('.ld-metal-chip');
+    if (metalChip) metalChip.addEventListener('click', () => { ensureRowMetal(row, true); });
+    paintMetalChip(row);
   });
   box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
     syncItemsFromDom();
@@ -432,6 +440,7 @@ function renderItemRows() {
       tare_weight : (src.tare_weight === '' || src.tare_weight == null) ? '0' : src.tare_weight,
       price       : src.price ?? '',
       unit        : src.unit || '',
+      metal_type  : src.metal_type || '',
     }));
     renderItemRows();
   }));
@@ -463,6 +472,7 @@ function syncItemsFromDom() {
       // of the wire. It stays out of the phone grid by living inside the
       // price cell, so that layout is not disturbed a second time.
       unit : row.querySelector('.ld-item-unit')?.value || 'lb',
+      metal_type: row.querySelector('.ld-item-metal')?.value || '',
       // ── AND THE COUNT, FOR A /piece ROW ────────────────────────────────
       // Posted unconditionally rather than only when the unit is /piece:
       // computeItem on the server drops it for a weight row anyway, and a

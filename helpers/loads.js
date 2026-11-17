@@ -127,6 +127,9 @@ function computeItem(it) {
     const amount = PU.amountFor({ unit, net, pieces, price });
     return {
         description: it.description || '',
+        // Ferrous / non-ferrous (2026-11-17): 'ferrous', 'non-ferrous' or null (Unsorted). Never guessed here;
+        // addLoad/updateLoad fill it from the learned map first. See helpers/itemMetal.js.
+        metal_type: require('./itemMetal').normType(it.metal_type),
         gross_weight: gross, tare_weight: tare, net_weight: net,
         // STORED AS '' WHEN IT IS POUNDS AND WAS ALREADY ''. Writing 'lb'
         // into every historic row on its next edit would be a migration
@@ -384,7 +387,8 @@ async function addLoad(entry) {
     // must never grow into it.
     const _known = require('./itemSpelling').knownSpellings();
     const items = Array.isArray(entry.items)
-        ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
+        ? require('./itemMetal').fill(require('./itemSpelling').canonicaliseItems(entry.items, _known)).map(computeItem) : [];
+    await require('./itemMetal').learnFromItems(items);
     const totals = sumItems(items);
     assertLoadNotNegative(totals, items);
 
@@ -513,7 +517,8 @@ async function editLoad(id, entry) {
     // must never grow into it.
     const _known = require('./itemSpelling').knownSpellings();
     const items = Array.isArray(entry.items)
-        ? require('./itemSpelling').canonicaliseItems(entry.items, _known).map(computeItem) : [];
+        ? require('./itemMetal').fill(require('./itemSpelling').canonicaliseItems(entry.items, _known)).map(computeItem) : [];
+    await require('./itemMetal').learnFromItems(items);
     const totals = sumItems(items);
     assertLoadNotNegative(totals, items);
 

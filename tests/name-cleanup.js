@@ -307,9 +307,15 @@ section('E. two companies stay two companies');
     // in the real petty cash. Required here, after the redirect, where it is
     // only ever read.
     const cfgNow = require(path.join(ROOT, 'config'));
-    ck('  and NOTHING rewrites outbound loads or trucker bills',
-       !everyTarget.some((t) => t.file === cfgNow.OUTBOUND_LOADS_FILE || t.file === cfgNow.TRUCKER_BILLS_FILE),
-       'buyers and haulage were not part of what she asked to clean');
+    // Apsara, 2026-11-14: "What if i want to clean the supplier/buyer names in similar way", then yes to Edge Yard only,
+    // suppliers and buyers together. So yard SALES (outbound loads) are now reachable, by the one `buyer` field and by
+    // no other, and that field is flagged yardScreenOnly so the Edge Metals screen does not list it. Trucker bills
+    // (haulage) were never part of it and stay out. Screen and tests: helpers/partyMaintenance.js, tests/party-maintenance.js.
+    ck('  and NOTHING rewrites trucker bills, and outbound loads are reached ONLY by the yard `buyer` field',
+       !everyTarget.some((t) => t.file === cfgNow.TRUCKER_BILLS_FILE)
+         && everyTarget.filter((t) => t.file === cfgNow.OUTBOUND_LOADS_FILE).every((t) => t.f === 'buyer')
+         && nc.FIELDS.buyer.yardScreenOnly === true,
+       JSON.stringify(everyTarget.filter((t) => t.file === cfgNow.OUTBOUND_LOADS_FILE).map((t) => t.f)));
 }
 
 // ── F. THROUGH THE REAL ROUTES ──────────────────────────────────────────────

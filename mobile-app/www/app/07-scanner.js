@@ -554,7 +554,7 @@ function blankLoadItem() {
   // `unit: ''` is pounds — the default, and what every historic row has.
   // `pieces: ''` rather than 0, because an empty count means "not typed" and
   // a zero means "nothing was delivered", and those are different answers.
-  return { description: '', gross_weight: '', tare_weight: '0', price: '', unit: '', pieces: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+  return { description: '', metal_type: '', gross_weight: '', tare_weight: '0', price: '', unit: '', pieces: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
 }
 
 // Local (not UTC) YYYY-MM-DD — a load dated by UTC-conversion could land on

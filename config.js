@@ -341,6 +341,8 @@ const FILES = {
     // typed once becomes a normal selectable option afterward instead of
     // requiring "Others…" every time.
     ITEM_TYPES_FILE: path.join(DATA_DIR, 'item_types.json'),
+    // Ferrous / non-ferrous learned per item name (helpers/itemMetal.js), 2026-11-17.
+    ITEM_METAL_FILE: path.join(DATA_DIR, 'item-metal-types.json'),
     // Journal of Edge Yard item renames (helpers/itemMaintenance.js) — what each
     // rename changed, so it can be undone.
     ITEM_RENAMES_FILE: path.join(DATA_DIR, 'item_renames.json'),

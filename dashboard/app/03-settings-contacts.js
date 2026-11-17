@@ -152,6 +152,22 @@ function renderSettings(s) {
           <div id="imHistory" style="display:flex; flex-direction:column; gap:6px; margin-top:14px;"></div>
         </div>
         <div class="card" style="padding:22px 24px;">
+          <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Supplier and buyer names</div>
+          <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">Edge Yard only. Find a supplier (bought loads) or a buyer (sales), tick the spellings that are the same company, and give them one name. A supplier rename also moves their advances. Issued PDFs keep their old wording. You can undo it.</div>
+          <div style="display:flex; gap:6px; margin-bottom:12px;">
+            <button id="pmTabSupplier" class="btn" style="padding:6px 14px; font-size:10px;">Suppliers</button>
+            <button id="pmTabBuyer" class="btn" style="padding:6px 14px; font-size:10px;">Buyers</button>
+          </div>
+          <input id="pmFilter" placeholder="Filter names (e.g. metalco)" style="color:var(--text-strong); outline:none; width:100%; max-width:420px; box-sizing:border-box; padding:10px 12px; margin-bottom:12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm);">
+          <div id="pmBar" style="display:none; align-items:center; gap:10px; margin-bottom:10px;">
+            <span id="pmSelected" style="flex:1; font-size:12.5px; color:var(--text-muted);"></span>
+            <button id="pmClear" class="btn" style="display:none; padding:6px 12px; font-size:10px;">Clear</button>
+            <button id="pmRename" class="btn btn-primary" disabled style="padding:7px 14px; font-size:11px;">Rename selected</button>
+          </div>
+          <div id="pmRows" style="display:flex; flex-direction:column; gap:8px;"></div>
+          <div id="pmHistory" style="display:flex; flex-direction:column; gap:6px; margin-top:14px;"></div>
+        </div>
+        <div class="card" style="padding:22px 24px;">
           <div style="font-family:var(--font-mono); font-size:11px; font-weight:600; letter-spacing:.14em; text-transform:uppercase; color:var(--text-strong); margin-bottom:4px;">Item description list</div>
           <div style="font-size:12.5px; color:var(--text-muted); margin-bottom:16px;">The descriptions offered while typing an item on a load. Anything new typed on a load is added here automatically. Renaming or removing one here only changes what future loads are offered — loads that already used the old wording keep it, and so do their PDFs and monthly sheets.</div>
           <div style="display:flex; gap:8px; margin-bottom:14px; max-width:420px;">
@@ -230,9 +246,13 @@ function renderSettings(s) {
 
   loadItemTypeRows();
   renderItemMaintenance();
+  renderPartyMaintenance();
   renderScoutLessons();
   const imf = $('imFilter');
   if (imf) { let t = null; imf.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderItemMaintenance, 250); }); }
+  const pmf = $('pmFilter');
+  if (pmf) { let t = null; pmf.addEventListener('input', () => { clearTimeout(t); t = setTimeout(renderPartyMaintenance, 250); }); }
+  ['Supplier', 'Buyer'].forEach(k => { const b = $('pmTab' + k); if (b) b.addEventListener('click', () => { pmKind = k.toLowerCase(); renderPartyMaintenance(); }); });
 }
 
 // ── Item description catalog manager (Settings > Yard) ────────────────
@@ -404,6 +424,87 @@ async function renderItemMaintenance() {
     }));
   } catch (e) {
     rows.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load items: ${esc(e.message)}</div>`;
+  }
+}
+
+// ── Supplier and buyer names (Settings, Edge Yard, 2026-11-15) ─────────────
+// Same shape as Item maintenance: filter, tick the spellings that are one company, give them one name. The
+// selection is kept per kind and survives a changed filter. Rewrites go through /api/party-maintenance (super only).
+let pmKind = 'supplier';
+const pmSelected = { supplier: new Set(), buyer: new Set() };
+async function renamePartyNames(kind, names) {
+  const word = kind === 'buyer' ? 'buyer' : 'supplier';
+  const first = names[0];
+  const to = await askText(names.length === 1
+    ? `Rename the ${word} "${first}" on all saved Edge Yard records to:`
+    : `Make these ${names.length} ${word} spellings one name:\n${names.map(n => '• ' + n).join('\n')}\n\nName to keep:`, first);
+  if (to === null || !to.trim()) return false;
+  if (names.length === 1 && to.trim() === first) return false;
+  const body = { from: names, to: to.trim() };
+  const p = await api(`/api/party-maintenance/${kind}/preview`, { method: 'POST', body: JSON.stringify(body) });
+  if (!p.total) { alert('Nothing to change.'); return false; }
+  const parts = Object.keys(p.byStore).map(k => `${p.byStore[k]} ${p.labels[k] || k}`).join(', ');
+  const msg = `Change ${names.length === 1 ? '"' + names[0] + '"' : names.length + ' spellings'} to "${p.to}"?\n\n${parts}.` +
+    (p.merges_into_existing ? `\n\nThey become one ${word}: "${p.to}".` : '') +
+    `\n\nOnly the name changes. Issued PDFs keep their old wording. You can undo this.`;
+  if (!await askYesNo(msg)) return false;
+  await api(`/api/party-maintenance/${kind}/apply`, { method: 'POST', body: JSON.stringify(body) });
+  return true;
+}
+
+async function renderPartyMaintenance() {
+  const rows = $('pmRows'), hist = $('pmHistory'), filter = $('pmFilter'), bar = $('pmBar');
+  if (!rows || !hist) return;
+  const kind = pmKind, sel = pmSelected[kind];
+  ['supplier', 'buyer'].forEach(k => { const b = $('pmTab' + k[0].toUpperCase() + k.slice(1)); if (b) b.className = 'btn' + (k === kind ? ' btn-primary' : ''); });
+  try {
+    const q = (filter && filter.value || '').trim();
+    const r = await api(`/api/party-maintenance/${kind}` + (q ? '?q=' + encodeURIComponent(q) : ''));
+    rows.innerHTML = r.names.length ? r.names.map(n => `
+      <div style="display:flex; align-items:center; gap:10px; padding:9px 12px; background:var(--surface-sunken); border-radius:var(--radius-xs);">
+        <input type="checkbox" class="pm-pick" data-name="${esc(n.name)}" ${sel.has(n.name) ? 'checked' : ''} style="width:17px; height:17px; flex:none;">
+        <div style="flex:1; min-width:0;">
+          <div style="font-size:13px; color:var(--text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(n.name)}</div>
+          <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">${n.rows} saved record${n.rows === 1 ? '' : 's'}</div>
+        </div>
+      </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No names match.</div>';
+    const refreshBar = () => {
+      if (!bar) return;
+      const n = sel.size;
+      bar.style.display = (r.names.length || n) ? 'flex' : 'none';
+      $('pmSelected').textContent = n ? `${n} selected: ${[...sel].join(', ')}` : 'Tick the spellings that are the same company';
+      const clr = $('pmClear'); if (clr) clr.style.display = n ? '' : 'none';
+      $('pmRename').disabled = n < 1;
+    };
+    refreshBar();
+    rows.querySelectorAll('.pm-pick').forEach(cb => cb.addEventListener('change', () => {
+      if (cb.checked) sel.add(cb.dataset.name); else sel.delete(cb.dataset.name);
+      refreshBar();
+    }));
+    const clr = $('pmClear');
+    if (clr) clr.onclick = () => { sel.clear(); rows.querySelectorAll('.pm-pick').forEach(cb => { cb.checked = false; }); refreshBar(); };
+    const go = $('pmRename');
+    if (go) go.onclick = async () => {
+      go.disabled = true;
+      try {
+        if (await renamePartyNames(kind, [...sel])) { sel.clear(); renderPartyMaintenance(); }
+      } catch (e) { alert(e.message); } finally { refreshBar(); }
+    };
+    hist.innerHTML = r.history.length ? '<div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--text-muted);">Recent changes</div>' + r.history.slice(0, 8).map(h => `
+      <div style="display:flex; align-items:center; gap:10px; font-size:12.5px; color:var(--text-strong);">
+        <span style="flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(h.label)} · ${h.rows} record${h.rows === 1 ? '' : 's'} <span style="color:var(--text-faint);">· ${esc(String(h.merge_id).replace(/^mrg_[a-z]+_/, '').slice(0, 10))}</span></span>
+        <button class="btn btn-pm-undo" data-id="${esc(h.merge_id)}" style="padding:5px 11px; font-size:10px;">Undo</button>
+      </div>`).join('') : '';
+    hist.querySelectorAll('.btn-pm-undo').forEach(btn => btn.addEventListener('click', async () => {
+      if (!await askYesNo('Undo this change? Records go back to the spelling they had.')) return;
+      btn.disabled = true;
+      try {
+        await api('/api/party-maintenance/undo', { method: 'POST', body: JSON.stringify({ id: btn.dataset.id }) });
+        renderPartyMaintenance();
+      } catch (e) { alert(e.message); btn.disabled = false; }
+    }));
+  } catch (e) {
+    rows.innerHTML = `<div style="color:var(--status-danger); font-size:12px;">Couldn't load names: ${esc(e.message)}</div>`;
   }
 }
 

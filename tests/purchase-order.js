@@ -412,14 +412,23 @@ const BOOK = [
         type('po_supplier_address', '800 East 62nd Street\nLos Angeles');
         const css = w.eval('poSheetCss()');
         const printCss = css.slice(css.indexOf('@media print'));
-        ck('printed, the header band and stripe run edge to edge, left to right', /\.bar\{margin:0;/.test(printCss) && /\.head\{margin:0 0 26px; padding:24px 14mm/.test(printCss), printCss);
-        ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:0 14mm /.test(printCss), printCss);
+        ck('printed, the green header band keeps 14mm side space and has no outer border or shadow', /\.head\{padding:28px 14mm/.test(printCss) && /\.po-sheet\{box-shadow:none; border:none;/.test(printCss), printCss);
+        ck('and the content below keeps the 14mm side space itself', /\.pad\{padding:24px 14mm /.test(printCss), printCss);
         const pp = w.eval('poPrint.toString()');
         ck('the print window has no side page margin, so the header reaches both edges', /@page\{margin:14mm 0;\}/.test(pp) && /body\{margin:0;/.test(pp));
         ck('and its FIRST page has no top margin, so the header sits at the top; later pages keep theirs', /@page :first\{margin:0 0 14mm;\}/.test(pp));
-        ck('and on screen the inset is still there (preview unchanged)', /\.pad\{padding:0 44px/.test(css.slice(0, css.indexOf('@media print'))));
-        ck('printed, the sheet is a fixed page-height in mm with the signatures pinned at its foot', /@media print\{[^}]*position:relative; min-height:262mm/.test(css) && /\.sign\{position:absolute; left:14mm; right:14mm; bottom:6mm/.test(css) && /\.pad\{padding:0 14mm 44mm/.test(css.slice(css.indexOf('@media print'))), css.slice(-500));
+        ck('and on screen the inset is still there (preview unchanged)', /\.pad\{padding:24px 44px/.test(css.slice(0, css.indexOf('@media print'))));
+        ck('printed, the sheet is a fixed page-height in mm with the signatures pinned above the footer bar', /@media print\{[^}]*position:relative; min-height:262mm/.test(css) && /\.sign\{position:absolute; left:14mm; right:14mm; bottom:16mm/.test(css) && /\.foot\{position:absolute; left:0; right:0; bottom:0/.test(css) && /\.pad\{padding:24px 14mm 54mm/.test(css.slice(css.indexOf('@media print'))), css.slice(-500));
         ck('and does NOT lean on 100vh or a flex column, which the browser measures differently when printing', !/100vh/.test(css) && !/@media print\{[^}]*flex-direction/.test(css), css.slice(-500));
+        // 2026-11-17 "mimic this design for purchase order": the sheet follows the proforma look.
+        const sheet = $('poPreview').querySelector('.po-sheet');
+        const box = sheet.querySelector('.nobox');
+        ck('the title is PURCHASE ORDER, in the proforma style (two-tone h1)', /^purchase order$/i.test(sheet.querySelector('h1').textContent.trim()) && !!sheet.querySelector('h1 span'));
+        ck('the number box carries the PO number and the PO date', !!box && /PO No/i.test(box.textContent) && /PO Date/i.test(box.textContent) && box.textContent.includes(w.eval('poCollect()').date), box && box.textContent);
+        ck('the date is shown once, not again in the strip below', (sheet.textContent.match(new RegExp(w.eval('poCollect()').date.replace(/[/]/g, '\\/'), 'g')) || []).length === 1);
+        ck('a dark footer names the company and the document', !!sheet.querySelector('.foot') && /Purchase Order/.test(sheet.querySelector('.foot').textContent) && sheet.querySelector('.foot').textContent.includes(w.eval('poCollect()').company));
+        ck('the proforma template itself was not touched by this restyle', !/po-sheet/.test(require('fs').readFileSync(path.join(__dirname, '..', 'assets', 'proforma-dc2', 'template.html'), 'utf8')));
+        ck('nor the invoice template', !/po-sheet/.test(require('fs').readFileSync(path.join(__dirname, '..', 'assets', 'invoice-dc2', 'template.html'), 'utf8')));
         pick('po_deliver', '');
         ck('with no delivery chosen the card shows a dash, not a blank', cards()[1].querySelector('.nm') && /—/.test(cards()[1].textContent), cards()[1].innerHTML);
         pick('po_deliver', 'edge-metals-bofa');

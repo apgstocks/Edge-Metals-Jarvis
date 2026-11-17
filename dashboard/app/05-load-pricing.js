@@ -211,6 +211,8 @@ function renderItemRows() {
           <input class="ld-item-desc-input" placeholder="Type description…" autocomplete="off" value="${esc(desc)}" data-prev="${esc(desc)}">
           <div class="ac-dropdown ld-desc-ac hidden"></div>
         </div>
+        <input type="hidden" class="ld-item-metal" value="${esc(it.metal_type || '')}" data-for="${esc(it.metal_type ? metalKey(desc) : '')}">
+        <button type="button" class="ld-metal-chip" style="display:none; background:none; border:none; padding:2px 0 0; font-size:10.5px; text-align:left; cursor:pointer; text-decoration:underline;"></button>
       </div>
       <div class="ld-item-cap ld-item-cap-gross">
         <span class="ld-mobile-label">Gross</span>
@@ -236,10 +238,14 @@ function renderItemRows() {
       <div class="ld-item-price-wrap"><span class="ld-mobile-label">Price</span>
         <div class="ld-item-price-inputs">
           <input class="ld-item-price" type="number" step="any" placeholder="0" title="Price" value="${it.price ?? ''}">
-          <!-- ── TWO OPTIONS, HER CALL — AND A THIRD THAT PROTECTS THE ROW ──
-               Asked whether this screen should offer net ton, gross ton and
-               /piece as well, she chose display-only: pick them in the Edge
-               Yard app, read them here.
+          <!-- ── FOUR OPTIONS (2026-11-17), AND A FIFTH THAT PROTECTS THE ROW ──
+               On 2026-10-10 she chose display-only for net ton, gross ton and
+               /piece on this screen. On 2026-11-17 she asked for MT, gross
+               ton and net ton on the website load and sale screens ("Edge
+               yard should have mt/gross ton/net ton as well"), so /lb, /MT,
+               /net ton and /gross ton are offered here. /piece is still set
+               in the Edge Yard app: it needs a count box, and she did not ask
+               for it on the website.
 
                But a two-option <select> handed a value it has no option for
                silently becomes "" — which is how a pay modal posted an empty
@@ -254,10 +260,10 @@ function renderItemRows() {
                round-trips untouched through a save. Switching it to /lb or
                /MT is still possible, because that is a decision she made
                rather than one the markup made for her. -->
-          <select class="ld-item-unit" title="What is this price per? Net ton, gross ton and /piece are set in the Edge Yard app">
+          <select class="ld-item-unit" title="What is this price per? /piece is set in the Edge Yard app">
             ${(() => {
               const cur = unitOf(it.unit) || 'lb';
-              const here = ['lb', 'mt'];
+              const here = ['lb', 'mt', 'nt', 'gt'];
               const opts = here.map((u) => `<option value="${u}"${cur === u ? ' selected' : ''}>${UNIT_LABEL[u]}</option>`);
               if (!here.includes(cur)) {
                 opts.push(`<option value="${cur}" selected disabled>${UNIT_LABEL[cur]} (set in the app)</option>`);
@@ -433,7 +439,13 @@ function renderItemRows() {
       setTimeout(close, 150);
       applyPriceIfChanged();
       syncItemsFromDom();
+      // Ferrous or non-ferrous, as soon as they move to the next box. Deferred a beat so a tap on a suggestion
+      // (which fills the box) lands first.
+      setTimeout(() => { ensureRowMetal(row, false); }, 250);
     });
+    const metalChip = row.querySelector('.ld-metal-chip');
+    if (metalChip) metalChip.addEventListener('click', () => { ensureRowMetal(row, true); });
+    paintMetalChip(row);
   });
   box.querySelectorAll('.btn-remove-item').forEach(btn => btn.addEventListener('click', () => {
     syncItemsFromDom();
@@ -484,6 +496,7 @@ function renderItemRows() {
       tare_weight : (src.tare_weight === '' || src.tare_weight == null) ? '0' : src.tare_weight,
       price       : src.price ?? '',
       unit        : src.unit || '',
+      metal_type  : src.metal_type || '',
     }));
     renderItemRows();
   }));
@@ -514,6 +527,7 @@ function syncItemsFromDom() {
       // of the wire. It stays out of the phone grid by living inside the
       // price cell, so that layout is not disturbed a second time.
       unit : row.querySelector('.ld-item-unit')?.value || 'lb',
+      metal_type: row.querySelector('.ld-item-metal')?.value || '',
       // ── THE COUNT ROUND-TRIPS EVEN THOUGH THIS SCREEN CANNOT SET IT ────
       // A /piece row's amount IS its count times its price. If this screen
       // posted no `pieces`, computeItem would see undefined, store null, and
@@ -715,7 +729,7 @@ function showCaptureMenu(anchorBtn, { onCamera, onFiles }) {
 // (still showing the "0" default, nothing else filled in) isn't wrongly
 // treated as a real item requiring a description.
 function blankLoadItem() {
-  return { description: '', gross_weight: '', tare_weight: '0', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
+  return { description: '', metal_type: '', gross_weight: '', tare_weight: '0', price: '', unit: '', grossPhoto: null, tarePhoto: null, gross_photo_link: null, tare_photo_link: null, gross_photo_drive_id: null, tare_photo_drive_id: null };
 }
 
 // Edge Trading is always the BUYER on every load — per Apsara 2026-08-15
@@ -746,6 +760,123 @@ function addressBookExactMatch(name) {
   const q = String(name || '').trim().toLowerCase();
   if (!q) return null;
   return addressBookCache.find(e => (e.aliases || []).some(a => a.toLowerCase() === q)) || null;
+}
+
+// ── "DID YOU MEAN ...?" ON THE SELLER / BUYER NAME (2026-11-15) ────────────
+// ── Ferrous / non-ferrous (Apsara, 2026-11-17) ──────────────────────────────
+// "when you type an item, as soon as they move to next box, ask them whether it is ferrous or non-ferrous."
+// Chosen with her: website AND phone app, loads AND sales; asked once per item NAME and then remembered
+// (the server keeps the list, helpers/itemMetal.js); the person typing must pick one, so the dialog has no
+// Cancel and the backdrop does nothing. Asked when the box is left, and again at Save for any row that got past
+// that (a row filled by a suggestion tap, or a saved load edited). The server does not insist on it, so a
+// load recorded by voice or by Scout, with no form to ask on, still saves. Same code on both screens
+// (dashboard/app/05-load-pricing.js, mobile-app/www/app/05-payment-roles.js).
+let itemMetalMap = null;                                   // item name key -> 'ferrous' | 'non-ferrous'
+const METAL_LABEL = { 'ferrous': 'Ferrous', 'non-ferrous': 'Non-ferrous' };
+const metalKey = (d) => String(d == null ? '' : d).toLowerCase().replace(/[^a-z0-9]/g, '');
+async function loadItemMetalMap() {
+  try { const r = await api('/api/loads/item-metal'); itemMetalMap = (r && r.types) || {}; }
+  catch (e) { if (!itemMetalMap) itemMetalMap = {}; }      // a failed lookup only means it asks once more
+}
+function askMetalType(desc) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.style.zIndex = '10050';
+    overlay.innerHTML = `
+      <div class="modal-shell" style="max-width:360px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-body" style="padding:22px 24px 10px;">
+          <div style="font-size:15px; font-weight:600; color:var(--text-strong); line-height:1.4;">Is "${esc(desc)}" ferrous or non-ferrous?</div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:8px; line-height:1.5;">Ferrous is iron and steel (a magnet sticks). Non-ferrous is copper, aluminium, brass, stainless and the like.</div>
+        </div>
+        <div class="modal-foot" style="gap:10px;">
+          <button type="button" class="btn" data-metal="non-ferrous" style="flex:1; padding:12px;">Non-ferrous</button>
+          <button type="button" class="btn btn-primary" data-metal="ferrous" style="flex:1; padding:12px;">Ferrous</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll('[data-metal]').forEach((b) => b.addEventListener('click', () => { overlay.remove(); resolve(b.dataset.metal); }));
+  });
+}
+function paintMetalChip(row) {
+  const hid = row.querySelector('.ld-item-metal');
+  const chip = row.querySelector('.ld-metal-chip');
+  const input = row.querySelector('.ld-item-desc-input');
+  if (!hid || !chip || !input) return;
+  chip.style.display = input.value.trim() ? '' : 'none';
+  chip.textContent = hid.value ? (METAL_LABEL[hid.value] || hid.value) + ' · change' : 'Ferrous or non-ferrous? Tap to choose';
+  chip.style.color = hid.value ? 'var(--text-muted)' : 'var(--danger, #c0392b)';
+}
+function setRowMetal(row, type) {
+  const hid = row.querySelector('.ld-item-metal');
+  const input = row.querySelector('.ld-item-desc-input');
+  if (!hid || !input) return;
+  hid.value = type || '';
+  hid.dataset.for = metalKey(input.value);
+  paintMetalChip(row);
+  syncItemsFromDom();
+}
+// One question at a time per row. `force` re-asks (the chip), otherwise a row that already has an answer for its
+// current name, or a name the server has learned, is settled without a dialog.
+function ensureRowMetal(row, force) {
+  if (row._metalAsk) return row._metalAsk;
+  const run = (async () => {
+    const input = row.querySelector('.ld-item-desc-input');
+    const hid = row.querySelector('.ld-item-metal');
+    if (!input || !hid || !row.isConnected) return;
+    const desc = input.value.trim();
+    const k = metalKey(desc);
+    if (!k) { hid.value = ''; hid.dataset.for = ''; paintMetalChip(row); return; }
+    if (!force && hid.value && hid.dataset.for === k) { paintMetalChip(row); return; }
+    if (!force) {
+      if (!itemMetalMap) await loadItemMetalMap();
+      const known = itemMetalMap[k];
+      if (known) { setRowMetal(row, known); return; }
+    }
+    const pick = await askMetalType(desc);
+    itemMetalMap = itemMetalMap || {};
+    itemMetalMap[k] = pick;
+    setRowMetal(row, pick);
+  })();
+  row._metalAsk = run;
+  run.then(() => { row._metalAsk = null; }, () => { row._metalAsk = null; });
+  return run;
+}
+async function ensureAllMetal() {
+  const rows = document.querySelectorAll('#ld_items .item-row');
+  for (const row of rows) await ensureRowMetal(row, false);
+}
+
+// Apsara: "Spelling variants as they type ask while creating load/sales that whether they mean this?"
+// Asked once, at Save, when the typed name is not exactly an existing one but looks like one. YES swaps in the
+// existing spelling; NO keeps what was typed. Nothing changes without a Yes, and a failed lookup never blocks saving.
+// Asked once per typed name per session, whatever the answer, so a spelling she meant is not questioned every time.
+// Same code on the website and the phone (dashboard/app/05-load-pricing.js, mobile-app/www/app/02-cache-catalogue.js).
+const partyAsked = new Set();
+async function confirmPartyName() {
+  const box = $('ld_seller');
+  if (!box) return;
+  const typed = box.value.trim();
+  if (!typed) return;
+  const mode = (typeof loadModalMode !== 'undefined' && loadModalMode === 'sale') ? 'sale' : 'purchase';
+  const key = mode + '|' + typed.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (partyAsked.has(key)) return;
+  partyAsked.add(key);
+  try {
+    if (addressBookExactMatch(typed)) return;      // a contact she saved on purpose
+    const r = await api('/api/loads/party-similar?kind=' + mode + '&name=' + encodeURIComponent(typed));
+    if (!r || r.known || !r.suggestions || !r.suggestions.length) return;
+    const top = r.suggestions[0];
+    const word = mode === 'sale' ? 'buyer' : 'seller';
+    const yes = await askYesNo('You typed "' + typed + '". Is that the same ' + word + ' as "' + top.name + '" (already on '
+      + top.rows + ' saved record' + (top.rows === 1 ? '' : 's') + ')?\n\nYes uses "' + top.name + '". No keeps "' + typed + '".');
+    if (yes) {
+      box.value = top.name;
+      try { box.dispatchEvent(new Event('blur')); } catch (e) { /* only fills a blank address from the address book */ }
+    }
+  } catch (e) { /* a failed lookup never blocks saving */ }
 }
 
 // Local (not UTC) YYYY-MM-DD — a load dated by UTC-conversion could land on
@@ -967,6 +1098,7 @@ function openEditLoadModal(load) {
     tare_weight : (it.tare_weight ?? '') === '' ? '0' : it.tare_weight,
     price: fmtRate(it.price),
     unit : it.unit || '',
+    metal_type: it.metal_type || '',
     grossPhoto: null, tarePhoto: null,
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,

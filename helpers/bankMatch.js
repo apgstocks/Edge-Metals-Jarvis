@@ -48,9 +48,24 @@ const round2 = (n) => (typeof n === 'number' && isFinite(n) ? Math.round(n * 100
 const num0 = (v) => { const n = Number(v); return isFinite(n) ? n : 0; };
 const day = (d) => String(d || '').slice(0, 10);
 
+// Parsing the same few hundred date strings millions of times was two thirds of the time the bank "For review" list
+// took (Apsara, 2026-11-16: "it takes lot of time to complete loading once transaction is posted"): the withdrawal
+// sweep compares every bank row with every recorded payment. A date string always parses to the same instant, so
+// remembering the answer changes no result, only how often the work is done. Bounded so it cannot grow without limit.
+const _dayMs = new Map();
+const dayMs = (d) => {
+    const k = day(d);
+    let v = _dayMs.get(k);
+    if (v === undefined) {
+        v = Date.parse(k + 'T00:00:00Z');
+        if (_dayMs.size >= 20000) _dayMs.clear();
+        _dayMs.set(k, v);
+    }
+    return v;
+};
 const daysBetween = (a, b) => {
-    const x = Date.parse(day(a) + 'T00:00:00Z');
-    const y = Date.parse(day(b) + 'T00:00:00Z');
+    const x = dayMs(a);
+    const y = dayMs(b);
     if (!isFinite(x) || !isFinite(y)) return Infinity;
     return Math.round((y - x) / 86400000);
 };

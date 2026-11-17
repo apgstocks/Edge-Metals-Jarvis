@@ -8477,49 +8477,71 @@ function poProblems(d) {
 }
 
 function poSheetCss() {
-  // 2026-10-26, redesign after "it looks ugly now": sans-serif and the
-  // green/steel palette of the Edge Metals proforma, in place of the first
-  // draft's serif and black bars. System fonts only, so the print window
-  // never waits on a download. print-color-adjust keeps the tints on paper.
-  return '.po-sheet{font-family:"Helvetica Neue",Helvetica,Arial,sans-serif; color:#2B3239; background:#fff; padding:0; line-height:1.45; font-size:12.5px; max-width:794px; margin:0 auto; box-shadow:0 1px 4px rgba(0,0,0,.28); -webkit-print-color-adjust:exact; print-color-adjust:exact; overflow:hidden;}'
+  // 2026-11-17, "mimic this design for purchase order" (Apsara, with the
+  // signed Jemulpo proforma attached): the PO sheet now follows the proforma's
+  // look — full-width green header with a rule, a big two-tone title with the
+  // number box beside it, tinted party cards, a solid green table header, a
+  // dark-green total box, and a dark footer. This is the PURCHASE ORDER tab
+  // only: the proforma and invoice templates are untouched.
+  // The proforma embeds Poppins / DM Sans / IBM Plex Mono as base64. The PO
+  // stays on system fonts (2026-10-26: the print window must never wait on a
+  // download), so each stack NAMES the proforma face first and falls back to
+  // the closest system face. Where those fonts are not installed it will look
+  // close, not identical.
+  const D = '"Poppins","Helvetica Neue",Helvetica,Arial,sans-serif';
+  const M = '"IBM Plex Mono",ui-monospace,Menlo,Consolas,"Courier New",monospace';
+  return '.po-sheet{font-family:"DM Sans","Helvetica Neue",Helvetica,Arial,sans-serif; color:#2B3239; background:#fff; padding:0; line-height:1.45; font-size:12.5px; max-width:794px; margin:0 auto; border:1px solid #E5E9EC; box-shadow:0 1px 4px rgba(0,0,0,.18); -webkit-print-color-adjust:exact; print-color-adjust:exact; overflow:hidden;}'
     + '.po-sheet *{box-sizing:border-box;}'
-    + '.po-sheet .bar{height:6px; margin:30px 44px 0; border-radius:6px 6px 0 0; background:linear-gradient(90deg,#226620,#3DA836 55%,#7FD172);}'
-    + '.po-sheet .pad{padding:0 44px 34px;}'
-    + '.po-sheet .head{display:flex; justify-content:space-between; align-items:center; gap:20px; padding:24px 14px 24px; margin:0 44px 26px; background:linear-gradient(160deg,#ECF8EA 0%,#fff 58%,#ECF8EA 100%); border:1px solid #D3F0CD; border-top:none; border-radius:0 0 6px 6px;}'
-    + '.po-sheet .brand{display:flex; gap:15px; align-items:center; flex:1; min-width:0;} .po-sheet .brand svg{flex:none; display:block;}'
-    + '.po-sheet .co{white-space:nowrap; font-size:22px; font-weight:800; letter-spacing:-.02em; color:#0C0E10; line-height:1.1;}'
-    + '.po-sheet .tag{font-size:9.5px; font-weight:800; letter-spacing:.2em; text-transform:uppercase; color:#3DA836; margin-top:5px;}'
-    + '.po-sheet .co-addr{font-size:11px; color:#57616A; margin-top:8px; white-space:pre-line; line-height:1.5;}'
-    + '.po-sheet .contact{font-size:11px; color:#2E861F; font-weight:600; margin-top:2px;}'
-    + '.po-sheet .title{text-align:right; flex:none;}'
-    + '.po-sheet .title b{display:block; font-size:22px; font-weight:800; letter-spacing:.1em; white-space:nowrap; color:#14181B; line-height:1;}'
-    + '.po-sheet .title .no{display:inline-block; margin-top:11px; background:#3DA836; color:#fff; border-radius:999px; padding:5px 16px; font-size:12.5px; font-weight:700; letter-spacing:.04em;}'
-    + '.po-sheet .k{display:block; font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:#7E8891; margin-bottom:3px;}'
-    + '.po-sheet .meta{display:grid; grid-template-columns:repeat(4,1fr); background:#F3F5F7; border-radius:6px; margin-bottom:24px;}'
-    + '.po-sheet .meta div{padding:11px 14px; font-weight:600; color:#14181B; border-right:1px solid #E5E9EC;} .po-sheet .meta div:last-child{border-right:none;}'
-    + '.po-sheet .parties{display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-bottom:26px;}'
-    + '.po-sheet .party{border:1px solid #E5E9EC; border-left:3px solid #3DA836; border-radius:4px; padding:12px 14px 12px 11px;}'
-    + '.po-sheet .party .k{color:#2E861F;} .po-sheet .party .v{white-space:pre-line; color:#3C454D; line-height:1.55;} .po-sheet .party .nm{font-weight:700; font-size:14px; color:#0C0E10; margin-bottom:2px;}'
+    + '.po-sheet .pad{padding:24px 44px 34px;}'
+    + '.po-sheet .head{padding:28px 44px 26px; background:linear-gradient(160deg,#ECF8EA 0%,#fff 55%,#ECF8EA 100%);}'
+    + '.po-sheet .toprow{display:flex; justify-content:space-between; align-items:center; gap:24px;}'
+    + '.po-sheet .brand{display:flex; gap:13px; align-items:center; min-width:0;} .po-sheet .brand svg{flex:none; display:block; width:46px; height:46px;}'
+    + '.po-sheet .co{white-space:nowrap; font-family:' + D + '; font-size:21px; font-weight:800; letter-spacing:-.02em; color:#0C0E10; line-height:1.1;}'
+    + '.po-sheet .tag{font-size:10px; font-weight:700; letter-spacing:.18em; text-transform:uppercase; color:#3DA836; margin-top:4px; line-height:1;}'
+    + '.po-sheet .co-addr{font-family:' + M + '; font-size:10.5px; color:#3C454D; line-height:1.7; text-align:right; white-space:pre-line;}'
+    + '.po-sheet .contact{font-family:' + M + '; font-size:10.5px; color:#2E861F; line-height:1.7; text-align:right;}'
+    + '.po-sheet .rule{display:flex; align-items:center; margin:16px 0 20px;} .po-sheet .rule i{display:block; height:2px; width:56px; background:#3DA836;} .po-sheet .rule b{display:block; height:1px; flex:1; background:rgba(167,176,183,.55);}'
+    + '.po-sheet .titlerow{display:flex; justify-content:space-between; align-items:flex-start; gap:24px;}'
+    + '.po-sheet .eyebrow{font-family:' + M + '; font-size:10.5px; font-weight:500; letter-spacing:.16em; text-transform:uppercase; color:#2E861F;}'
+    + '.po-sheet h1{margin:10px 0 0; font-family:' + D + '; font-weight:800; font-size:36px; line-height:1; letter-spacing:-.025em; color:#0C0E10; text-transform:uppercase; white-space:nowrap;} .po-sheet h1 span{color:#3DA836;}'
+    + '.po-sheet .nobox{flex:0 0 250px; background:#fff; border:1px solid #ABE2A1; border-radius:8px; overflow:hidden;}'
+    + '.po-sheet .nobox div{display:flex; justify-content:space-between; gap:12px; padding:8px 14px; border-bottom:1px solid #D3F0CD;} .po-sheet .nobox div:last-child{border-bottom:none;}'
+    + '.po-sheet .nobox span{font-family:' + M + '; font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:#7E8891; white-space:nowrap; align-self:center;}'
+    + '.po-sheet .nobox b{font-family:' + M + '; font-size:11px; font-weight:600; color:#0C0E10; text-align:right; word-break:break-all; line-height:1.4;}'
+    + '.po-sheet .k{display:block; font-family:' + M + '; font-size:9.5px; letter-spacing:.1em; text-transform:uppercase; color:#7E8891; margin-bottom:4px;}'
+    + '.po-sheet .parties{display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:18px;}'
+    + '.po-sheet .party{border:1px solid #E5E9EC; border-radius:8px; padding:16px 18px; background:#F3F5F7; border-color:#CBD1D6;}'
+    + '.po-sheet .party:first-child{background:#ECF8EA; border-color:#D3F0CD;}'
+    + '.po-sheet .party .k{letter-spacing:.12em; margin-bottom:7px; color:#3C454D;} .po-sheet .party:first-child .k{color:#2E861F;} .po-sheet .party .k:before{content:"\\25CF\\00a0\\00a0";}'
+    + '.po-sheet .party .v{white-space:pre-line; color:#3C454D; line-height:1.6; font-size:12.5px;} .po-sheet .party .nm{font-family:' + D + '; font-weight:700; font-size:16px; color:#0C0E10; margin-bottom:5px; line-height:1.3;}'
+    + '.po-sheet .meta{display:grid; grid-template-columns:repeat(3,1fr); background:#fff; border:1px solid #CBD1D6; border-radius:8px; overflow:hidden; margin-bottom:22px;}'
+    + '.po-sheet .meta div{padding:11px 14px; font-weight:700; color:#14181B; border-right:1px solid #E5E9EC;} .po-sheet .meta div:last-child{border-right:none;}'
     + '.po-sheet table{width:100%; border-collapse:collapse;}'
-    + '.po-sheet th{font-size:9px; font-weight:700; letter-spacing:.14em; text-transform:uppercase; text-align:left; color:#57616A; background:#F3F5F7; padding:9px 11px; white-space:nowrap; border:none; border-bottom:2px solid #3DA836;}'
+    + '.po-sheet th{font-size:11px; font-weight:600; letter-spacing:.03em; text-align:left; color:#fff; background:#2E861F; padding:12px 14px; white-space:nowrap; border:none;}'
+    + '.po-sheet th:first-child{border-top-left-radius:8px;} .po-sheet th:last-child{border-top-right-radius:8px;}'
     + '.po-sheet th.r,.po-sheet td.r{text-align:right; font-variant-numeric:tabular-nums;}'
-    + '.po-sheet td{padding:11px; border-bottom:1px solid #E5E9EC; vertical-align:top; font-size:12.5px; color:#2B3239;}'
+    + '.po-sheet td{padding:12px 14px; border-bottom:1px solid #E5E9EC; vertical-align:top; font-size:13px; color:#2B3239;}'
+    + '.po-sheet tbody tr:last-child td{border-bottom:2px solid #3DA836;}'
     + '.po-sheet td.d{font-weight:600; color:#0C0E10;}'
+    + '.po-sheet td.r.d{font-family:' + M + ';}'
     + '.po-sheet .pp{display:flex; justify-content:space-between; gap:12px; white-space:nowrap;} .po-sheet .pp + .pp{margin-top:3px;}'
     + '.po-sheet .pp.a{justify-content:flex-end;}'
-    + '.po-sheet .pp span{font-size:9px; font-weight:700; letter-spacing:.1em; text-transform:uppercase; color:#7E8891; align-self:center;}'
-    + '.po-sheet th:first-child,.po-sheet td:first-child{padding-left:14px;} .po-sheet th:last-child,.po-sheet td:last-child{padding-right:14px;}'
-    + '.po-sheet .tot{margin:16px 0 0 auto; width:290px;}'
-    + '.po-sheet .tot div{display:flex; justify-content:space-between; padding:5px 14px; font-variant-numeric:tabular-nums; color:#3C454D;}'
-    + '.po-sheet .tot .grand{background:#14181B; color:#fff; border-radius:5px; margin-top:7px; padding:10px 14px; font-weight:800; font-size:14px; letter-spacing:.02em;}'
-    + '.po-sheet .notes{margin-top:24px; padding:12px 14px; background:#F3F5F7; border-radius:5px; white-space:pre-line; font-size:11.5px; color:#3C454D; line-height:1.6;}'
-    + '.po-sheet .notes .k{color:#57616A;}'
+    + '.po-sheet .pp span{font-family:' + M + '; font-size:9px; letter-spacing:.1em; text-transform:uppercase; color:#7E8891; align-self:center;}'
+    + '.po-sheet .tot{margin:14px 0 0 auto; width:304px;}'
+    + '.po-sheet .tot div{display:flex; justify-content:space-between; align-items:center; padding:8px 2px; border-bottom:1px solid #E5E9EC; font-variant-numeric:tabular-nums; color:#3C454D;}'
+    + '.po-sheet .tot div span + span{font-family:' + M + '; font-size:13px; font-weight:500; color:#0C0E10;}'
+    + '.po-sheet .tot .grand{background:#226620; color:#fff; border-radius:8px; border:none; border-top:4px solid #57BE49; margin-top:8px; padding:13px 16px 14px; align-items:flex-end; gap:12px;}'
+    + '.po-sheet .tot .grand span:first-child{font-family:' + M + '; font-size:10.5px; letter-spacing:.1em; text-transform:uppercase; color:#ABE2A1; padding-bottom:4px;}'
+    + '.po-sheet .tot .grand span + span{font-family:' + D + '; font-weight:800; font-size:24px; letter-spacing:-.02em; color:#fff;}'
+    + '.po-sheet .notes{margin-top:22px; padding:13px 16px; background:#ECF8EA; border:1px solid #D3F0CD; border-radius:8px; white-space:pre-line; font-size:12px; color:#3C454D; line-height:1.6;}'
+    + '.po-sheet .notes .k{color:#2E861F;}'
     + '.po-sheet .sign{margin-top:36px; display:flex; gap:44px;} .po-sheet .sg{flex:1;}'
     + '.po-sheet .ink{height:44px; display:flex; align-items:flex-end;} .po-sheet .ink img{max-height:42px; max-width:170px;}'
-    + '.po-sheet .ln{border-top:1px solid #14181B; padding-top:6px; font-size:11px; color:#57616A; line-height:18px;}'
-    + '.po-sheet .ln b{color:#0C0E10; font-size:11px;}'
+    + '.po-sheet .ln{border-top:2px solid #3DA836; padding-top:6px; font-family:' + M + '; font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:#7E8891; line-height:18px;}'
+    + '.po-sheet .ln b{font-family:' + D + '; font-size:13px; letter-spacing:0; text-transform:none; color:#0C0E10;}'
     + '.po-sheet .empty{color:#A7B0B7; font-style:italic; font-weight:400;}'
-    + '@media print{.po-sheet{box-shadow:none; max-width:none; position:relative; min-height:262mm;} .po-sheet .sign{position:absolute; left:14mm; right:14mm; bottom:6mm; margin-top:0;} .po-sheet .bar{margin:0; border-radius:0;} .po-sheet .head{margin:0 0 26px; padding:24px 14mm; border:none; border-radius:0;} .po-sheet .pad{padding:0 14mm 44mm;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
+    + '.po-sheet .foot{display:flex; justify-content:space-between; align-items:center; gap:12px; padding:13px 44px; background:#0C0E10; font-family:' + M + '; font-size:9.5px; letter-spacing:.08em; text-transform:uppercase; color:#A7B0B7;} .po-sheet .foot span:first-child{color:#57BE49;}'
+    + '@media print{.po-sheet{box-shadow:none; border:none; max-width:none; position:relative; min-height:262mm;} .po-sheet .sign{position:absolute; left:14mm; right:14mm; bottom:16mm; margin-top:0;} .po-sheet .head{padding:28px 14mm 26px;} .po-sheet .pad{padding:24px 14mm 54mm;} .po-sheet .foot{position:absolute; left:0; right:0; bottom:0; padding:13px 14mm;} .po-sheet tr,.po-sheet .party{page-break-inside:avoid;} .po-sheet .sign,.po-sheet .tot,.po-sheet .notes{page-break-inside:avoid;}}';
 }
 
 // The Edge Metals mark, as on the proforma header. Printed only for Edge
@@ -8563,15 +8585,20 @@ function poSheetHtml(d) {
     + '</td><td class="r d">' + (d.two
       ? '<div class="pp a">' + esc(poMoney(l.amountCents)) + '</div><div class="pp a">' + esc(poMoney(l.amount2Cents)) + '</div>'
       : esc(poMoney(l.amountCents))) + '</td></tr>').join('');
-  return '<div class="po-sheet"><div class="bar"></div>'
-    + '<div class="head"><div class="brand">' + (poIsEdgeMetals(d.company) ? PO_LOGO : '') + '<div>'
-    + '<div class="co">' + (d.company ? esc(d.company) : miss('Choose the issuing company')) + '</div>'
-    + (poIsEdgeMetals(d.company) ? '<div class="tag">Global Scrap</div>' : '')
-    + (d.companyAddress ? '<div class="co-addr">' + esc(d.companyAddress) + '</div>' : '')
+  const nm = d.company ? esc(d.company) : miss('Choose the issuing company');
+  const row = (k, v) => '<div><span>' + k + '</span><b>' + (v ? esc(v) : '—') + '</b></div>';
+  return '<div class="po-sheet">'
+    + '<div class="head"><div class="toprow"><div class="brand">' + (poIsEdgeMetals(d.company) ? PO_LOGO : '') + '<div>'
+    + '<div class="co">' + nm + '</div>'
+    + (poIsEdgeMetals(d.company) ? '<div class="tag">Inc. &middot; Global Scrap</div>' : '')
+    + '</div></div>'
+    + '<div>' + (d.companyAddress ? '<div class="co-addr">' + esc(d.companyAddress) + '</div>' : '')
     + (d.company ? '<div class="contact">Tel ' + esc(PO_CONTACT.phone) + '</div><div class="contact">' + esc(PO_CONTACT.email) + '</div>' : '')
     + '</div></div>'
-    + '<div class="title"><b>PURCHASE ORDER</b><span class="no">No. ' + (d.number ? esc(d.number) : '—') + '</span></div></div>'
-    + '<div class="pad"><div class="meta">' + meta('PO date', d.date) + meta('Required by', d.required) + meta('Payment terms', d.terms) + meta('Currency', 'USD') + '</div>'
+    + '<div class="rule"><i></i><b></b></div>'
+    + '<div class="titlerow"><div><div class="eyebrow">// Order to supplier</div><h1>Purchase <span>Order</span></h1></div>'
+    + '<div class="nobox">' + row('PO No', d.number) + row('PO Date', d.date) + '</div></div></div>'
+    + '<div class="pad"><div class="meta">' + meta('Required by', d.required) + meta('Payment terms', d.terms) + meta('Currency', 'USD') + '</div>'
     + '<div class="parties"><div class="party"><span class="k">Vendor</span><div class="nm">' + (d.supplier ? esc(d.supplier) : miss('—')) + '</div>'
     + (poVendorAddress(d) ? '<div class="v">' + esc(poVendorAddress(d)) + '</div>' : '') + '</div>'
     + '<div class="party"><span class="k">Deliver to</span>' + poShipToHtml(d.shipTo, miss) + '</div></div>'
@@ -8594,7 +8621,8 @@ function poSheetHtml(d) {
     + '<div class="ln">Buyer &mdash; ' + (d.company ? esc(d.company) : '&hellip;') + '<br>' + (d.signer ? '<b>' + esc(d.signer) + '</b>' : '&nbsp;') + '<br>Date</div></div>'
     + '<div class="sg"><div class="ink"></div>'
     + '<div class="ln">Seller &mdash; ' + (d.supplier ? esc(d.supplier) : '&hellip;') + '<br>Name<br>Date</div></div></div>'
-    + '</div></div>';
+    + '</div>'
+    + '<div class="foot"><span>&#9679; &nbsp;' + (d.company ? esc(d.company) : '&hellip;') + '</span><span>Purchase Order' + (d.number ? ' &middot; No. ' + esc(d.number) : '') + '</span></div></div>';
 }
 
 function poRefresh() {

@@ -254,7 +254,7 @@ module.exports = function (app, ctx) {
             const planned = nc.plan(field);
             res.json({
                 ok: true, field,
-                fields: nc.FIELD_KEYS.map((k) => ({ key: k, label: nc.FIELDS[k].label, where: nc.FIELDS[k].where })),
+                fields: nc.FIELD_KEYS.filter((k) => !nc.FIELDS[k].yardScreenOnly).map((k) => ({ key: k, label: nc.FIELDS[k].label, where: nc.FIELDS[k].where })),
                 clusters: planned.clusters,
                 byStore: planned.byStore,
                 total: planned.total,

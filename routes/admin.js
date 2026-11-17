@@ -289,6 +289,52 @@ module.exports = function (app, ctx) {
         catch (e) { res.status(400).json({ error: e.message }); }
     });
 
+    // ── EDGE YARD SUPPLIER / BUYER NAMES (2026-11-15) ───────────────────
+    // Apsara: "What if i want to clean the supplier/buyer names in similar way", then yes to Edge Yard only,
+    // suppliers and buyers together. ADMIN for all four routes, the same gate as Item maintenance on the same
+    // settings modal (staff get none of it). It is NOT requireSuper like the Edge Metals ledger's name merge:
+    // that gate is for Edge Metals ledger entries, and needing the Jarvis profile here would lock her out of a
+    // Yard screen that Item maintenance does not lock her out of. That was my call, not hers.
+    // See helpers/partyMaintenance.js. kind is "supplier" or "buyer".
+    app.get('/api/party-maintenance/:kind', requireAdmin, (req, res) => {
+        try {
+            const pm = require('./helpers/partyMaintenance');
+            res.json({ kind: req.params.kind, names: pm.summary(req.params.kind, { q: req.query.q }), history: pm.history(req.params.kind) });
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/party-maintenance/:kind/preview', requireAdmin, (req, res) => {
+        try { res.json(require('./helpers/partyMaintenance').preview(req.params.kind, req.body.from, req.body.to)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/party-maintenance/:kind/apply', requireAdmin, async (req, res) => {
+        try {
+            const pm = require('./helpers/partyMaintenance');
+            const audit = require('./helpers/audit');
+            const planned = pm.preview(req.params.kind, req.body.from, req.body.to);
+            const entry = await audit.record({
+                action: 'merge-names', subject: `yard-${req.params.kind}`, actor: actorOf(req), role: req.role, ip: req.ip,
+                detail: { field: planned.field, rows: planned.total, byStore: planned.byStore, to: planned.to, from: planned.from },
+            });
+            try {
+                const r = await pm.apply(req.params.kind, req.body.from, req.body.to, { by: actorOf(req) });
+                await audit.complete(entry, 'done', { changed: r.changed, merge_id: r.merge_id });
+                // The Drive sheets are rebuilt from the loads, so a renamed party changes them too (best-effort).
+                try { require('./helpers/sheetSync').scheduleSync(r.months || []); } catch (_) { /* Drive is best-effort */ }
+                res.json(r);
+            } catch (e) { await audit.complete(entry, 'failed', { reason: e.message }); throw e; }
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+    app.post('/api/party-maintenance/undo', requireAdmin, async (req, res) => {
+        try {
+            const audit = require('./helpers/audit');
+            const entry = await audit.record({ action: 'undo-name-merge', subject: req.body.id, actor: actorOf(req), role: req.role, ip: req.ip, detail: { merge_id: req.body.id } });
+            const r = await require('./helpers/partyMaintenance').undo(req.body.id);
+            await audit.complete(entry, 'done', { restored: r.restored });
+            try { require('./helpers/sheetSync').scheduleSync(r.months || []); } catch (_) { /* Drive is best-effort */ }
+            res.json(r);
+        } catch (e) { res.status(400).json({ error: e.message }); }
+    });
+
     // ── Quote requests (multi-trucker quote comparison table, 2026-08-05) ────
     // Read-only — every mutation (send/reminder/escalation/reply) happens
     // through the WhatsApp flow (workflow/quoteRequests.js) or the scheduler,

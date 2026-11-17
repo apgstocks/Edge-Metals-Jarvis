@@ -253,6 +253,12 @@ try {
     console.error('[CONTEXT] semantic search failed (non-fatal):', e.message);
 }
 
+// What she TAUGHT with scripts/notes.js, found by meaning. OFF unless JARVIS_TAUGHT_RECALL=1; managers and
+// team only; advisory (the prompt block says so). Never throws, never slows the reply past its own timeout.
+let taughtRules = null;
+try { taughtRules = await require('./taughtRecall').recallFor({ text: ctx.text, role: ctx.role }); }
+catch (e) { console.error('[CONTEXT] taught recall failed (non-fatal):', e.message); }
+
 // An `inform` fact (Jarvis's own inference) is labelled so the model can
 // weigh it differently from something Apsara actually said. Unlabelled, a
 // guess Jarvis made about itself reads with exactly the same weight as a
@@ -339,6 +345,8 @@ const view = {
     businessContext,
     recentSummaries,
     semanticMemory,
+    // What she TAUGHT (helpers/taughtRecall.js). null => the prompt block is left out entirely.
+    taughtRules   : taughtRules,
     urgentBookings: urgent,
     portStats,
     bookingsTable,
@@ -365,6 +373,7 @@ if (!['manager', 'team', 'yard'].includes(ctx.role)) {
     view.portStats = '(not shown)';
     view.urgentBookings = '(not shown)';
     view.businessContext = '(not shown)';
+    view.taughtRules = null;   // what she taught is internal guidance: never shown to an outsider
     view.truckerRoster = '(not shown)';
     view.supplierRoster = '(not shown)';
 }

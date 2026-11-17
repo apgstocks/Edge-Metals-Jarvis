@@ -596,7 +596,7 @@ function confirmForm(row, p, i) {
      radio handler enables it. A button that looks pressable and is refused is
      how she stops trusting the screen. */
   const locked = !!row.ambiguous;
-  return `${propChooser(row, i)}${dedBox(row, i)}
+  return `${propChooser(row, i)}${dedBox(row, i)}${invFinderHtml(row, i)}
   <div class="acts">
     <select data-mode="${i}">${modes.map((m) => `<option${m === 'Wire' ? ' selected' : ''}>${esc(m)}</option>`).join('')}</select>
     <select data-bank="${i}">
@@ -707,7 +707,7 @@ function renderRow(row, i) {
       ? `<div class="acts">${sg.map((s) => `<button class="btn go" data-learn="${esc(s.customer)}" data-desc="${esc(dep.descriptor)}">This is ${esc(s.customer)}</button>`).join('')}
            <span class="note">Answered once, every future deposit from them matches itself.</span></div>`
       : `<div class="acts">
-           <input type="text" data-name="${i}" placeholder="type the customer's name" size="26">
+           <input type="text" data-name="${i}" list="payerNames" autocomplete="off" placeholder="pick or type the customer's name" size="26">
            <button class="btn go" data-learnfree="${i}" data-desc="${esc(dep.descriptor)}">Remember this payer</button>
          </div>`;
     body += `<div class="acts"><button class="btn warn" data-exclude="${esc(dep.id)}">Not a customer payment</button>
@@ -1311,7 +1311,7 @@ function categoriseHtml(r) {
       </select>
       <button class="btn solid" data-cat-post="${esc(r.id)}" ${sug ? '' : 'disabled'}>Post</button>
     </div>
-    <div class="note" data-cat-effect style="margin-top:6px">${sug ? 'Suggested from the description — check it, then Post.' : 'Pick a category to see what Post will book.'}</div>
+    <div class="note" data-cat-effect style="margin-top:6px">${sug ? ((r.categorise || {}).learned ? `You filed this kind of line here ${r.categorise.learned.times} time${r.categorise.learned.times === 1 ? '' : 's'} before — check it, then Post.` : 'Suggested from the description — check it, then Post.') : 'Pick a category to see what Post will book.'}</div>
   </div>`;
 }
 async function catPreview(box) {
@@ -2287,10 +2287,136 @@ document.addEventListener('click', async (ev) => {
   }
 });
 
+/* ── FIND ANOTHER INVOICE (Apsara, 2026-11-16: "what if i want to search by invoice no/container") ────────────────
+   On a deposit whose customer is known: search THAT customer's open invoices by invoice no, container, booking or item,
+   tick the ones this deposit paid, set the amounts. The button records only when the amounts add up to the deposit to
+   the cent, and it posts through the same /api/sales-receipts call and the same server checks as Confirm. A shortfall
+   (bank charge or discount) is not handled here: that needs the Confirm path's question. One customer only: a receipt is
+   one customer's money. */
+const r2c = (n) => Math.round((Number(n) || 0) * 100) / 100;
+function invFinderHtml(row, i) {
+  if (!row || !row.party) return '';
+  return `<div class="acts"><button class="btn quiet" data-invfind="${i}" title="Search this customer's open invoices by invoice no, container, booking or item">Find another invoice</button></div>
+    <div data-invbox="${i}"></div>`;
+}
+function invState(i) { STATE.inv = STATE.inv || {}; return (STATE.inv[i] = STATE.inv[i] || { docs: null, picks: {}, q: '' }); }
+function invMatches(d, q) {
+  const w = String(q || '').toLowerCase().trim().split(/\s+/).filter(Boolean);
+  if (!w.length) return true;
+  const hay = [d.invoice_no, d.container_no, d.booking_no, d.item, d.label, d.id].join(' ').toLowerCase();
+  return w.every((x) => hay.includes(x));
+}
+function invSum(st) { return r2c(Object.values(st.picks).reduce((t, v) => t + (Number(v) || 0), 0)); }
+function invList(i, box) {
+  const st = invState(i);
+  const list = box.querySelector('[data-invlist]'); if (!list) return;
+  const shown = st.docs.filter((d) => invMatches(d, st.q) || st.picks[d.id] !== undefined);
+  list.innerHTML = shown.length ? shown.map((d) => {
+    const on = st.picks[d.id] !== undefined;
+    return `<div class="row1" style="margin:3px 0">
+      <input type="checkbox" data-invpick="${i}" data-invid="${esc(d.id)}" ${on ? 'checked' : ''}>
+      <span class="desc" style="flex:1;min-width:200px"><strong>${esc(d.container_no || d.invoice_no || d.id)}</strong>
+        <span class="when">${esc(d.date || '')}</span> ${esc(d.item || '')}
+        ${d.invoice_no && d.container_no ? `<span class="note" style="margin:0">inv ${esc(d.invoice_no)}</span>` : ''}</span>
+      <span class="note" style="margin:0">owes ${money(d.balance)}</span>
+      ${on ? `<input type="number" step="0.01" min="0" data-invamt="${i}" data-invid="${esc(d.id)}" value="${esc(st.picks[d.id])}" style="width:110px">` : ''}
+    </div>`;
+  }).join('') : `<div class="note">No open invoice of this customer matches "${esc(st.q)}".</div>`;
+}
+function invSummary(i, box) {
+  const st = invState(i);
+  const row = (STATE.data.rows || [])[i]; if (!row) return;
+  const dep = r2c(row.deposit.amount), sum = invSum(st), left = r2c(dep - sum);
+  const over = st.docs.filter((d) => st.picks[d.id] !== undefined && (Number(st.picks[d.id]) || 0) > d.balance + 0.005);
+  const bad = st.docs.some((d) => st.picks[d.id] !== undefined && !((Number(st.picks[d.id]) || 0) > 0));
+  const ok = Object.keys(st.picks).length > 0 && Math.abs(left) < 0.005 && !over.length && !bad;
+  const sm = box.querySelector('[data-invsum]');
+  if (sm) sm.textContent = !Object.keys(st.picks).length ? `Tick the invoices this ${money(dep)} paid.`
+    : over.length ? `${over[0].container_no || over[0].invoice_no || over[0].id} owes only ${money(over[0].balance)}: that amount is too high.`
+    : bad ? 'Every ticked invoice needs an amount above zero.'
+    : Math.abs(left) < 0.005 ? `${money(sum)} assigned: matches the deposit exactly.`
+    : left > 0 ? `${money(sum)} assigned, ${money(left)} still to assign.` : `${money(sum)} assigned, ${money(-left)} MORE than the deposit.`;
+  const go = box.querySelector('[data-invgo]'); if (go) go.disabled = !ok;
+}
+async function invOpen(i, card) {
+  const box = card.querySelector(`[data-invbox="${i}"]`); if (!box) return;
+  if (box.innerHTML.trim()) { box.innerHTML = ''; return; }
+  const row = (STATE.data.rows || [])[i]; if (!row) return;
+  const st = invState(i);
+  box.innerHTML = '<div class="note">Loading this customer\'s open invoices…</div>';
+  try {
+    const r = await api('/api/bank/open-invoices?party=' + encodeURIComponent(row.party));
+    st.docs = r.invoices || [];
+  } catch (e) { box.innerHTML = `<div class="note">Could not load the invoices: ${esc(e.message)}</div>`; return; }
+  box.innerHTML = `<div class="card-inner" style="margin:8px 0;padding:10px 12px;border:1px solid var(--border-subtle);border-radius:8px">
+    <div class="note" style="margin-top:0">${st.docs.length} open invoice(s) for ${esc(row.party)}. Search by invoice no, container, booking or item.</div>
+    <div class="acts"><input type="text" data-invq="${i}" placeholder="invoice no, container, item…" value="${esc(st.q)}" style="min-width:220px"></div>
+    <div data-invlist></div>
+    <div class="note" data-invsum></div>
+    <div class="acts"><button class="btn solid" data-invgo="${i}" disabled>Record this receipt against the ticked invoices</button></div>
+  </div>`;
+  invList(i, box); invSummary(i, box);
+}
+document.addEventListener('click', async (ev) => {
+  const f = ev.target.closest && ev.target.closest('[data-invfind]');
+  if (f) { ev.stopPropagation(); return invOpen(Number(f.dataset.invfind), f.closest('.card')); }
+  const g = ev.target.closest && ev.target.closest('[data-invgo]');
+  if (!g) return;
+  ev.stopPropagation();
+  const i = Number(g.dataset.invgo), card = g.closest('.card'), row = (STATE.data.rows || [])[i], st = invState(i);
+  if (!row || g.disabled) return;
+  const mode = (card.querySelector(`[data-mode="${i}"]`) || {}).value || '';
+  const bank = (card.querySelector(`[data-bank="${i}"]`) || {}).value || '';
+  g.disabled = true; const was = g.textContent; g.textContent = 'Recording…';
+  try {
+    await api('/api/sales-receipts', { body: {
+      date: row.deposit.date, amount: row.deposit.amount, mode, bank, customer: row.party, ref: row.deposit.id,
+      note: 'matched from the bank feed (invoices picked by hand)',
+      allocations: Object.keys(st.picks).map((id) => ({ sale_id: id, amount: r2c(st.picks[id]) })),
+    } });
+    toast('Receipt recorded', 'good');
+    delete STATE.inv[i];
+    load();
+  } catch (e) { g.disabled = false; g.textContent = was; toast(e.message, 'bad'); }
+}, true);
+document.addEventListener('change', (ev) => {
+  const c = ev.target.closest && ev.target.closest('[data-invpick]'); if (!c) return;
+  const i = Number(c.dataset.invpick), st = invState(i), box = c.closest('[data-invbox]');
+  const d = st.docs.find((x) => x.id === c.dataset.invid); if (!d) return;
+  if (c.checked) {
+    const row = (STATE.data.rows || [])[i];
+    const left = r2c(Number(row.deposit.amount) - invSum(st));
+    st.picks[d.id] = r2c(Math.min(d.balance, Math.max(0, left)));
+  } else delete st.picks[d.id];
+  invList(i, box); invSummary(i, box);
+});
+document.addEventListener('input', (ev) => {
+  const a = ev.target.closest && ev.target.closest('[data-invamt]');
+  if (a) { const i = Number(a.dataset.invamt), st = invState(i); st.picks[a.dataset.invid] = a.value; invSummary(i, a.closest('[data-invbox]')); return; }
+  const q = ev.target.closest && ev.target.closest('[data-invq]');
+  if (q) { const i = Number(q.dataset.invq), st = invState(i); st.q = q.value; const box = q.closest('[data-invbox]'); invList(i, box); invSummary(i, box); }
+});
+
+/* The names "Name payer" offers: customers with a sale in Jarvis (the only ones a deposit can match) and, marked, the
+   QuickBooks customers read in the nightly snapshot. Best effort: if it cannot be read the box still takes typing. */
+const payerKey = (n) => String(n || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+async function loadPayers() {
+  try {
+    const r = await api('/api/bank/payers');
+    STATE.payers = r.customers || [];
+    let dl = $('payerNames');
+    if (!dl) { dl = document.createElement('datalist'); dl.id = 'payerNames'; document.body.appendChild(dl); }
+    dl.innerHTML = STATE.payers.map((c) => `<option value="${esc(c.name)}">${esc(c.ledger
+      ? (c.openCount ? `${c.openCount} open invoice(s), ${money(c.open)}` : 'in Jarvis')
+      : 'QuickBooks only: no invoice in Jarvis')}</option>`).join('');
+  } catch (e) { STATE.payers = null; }
+}
+
 async function load() {
   resetPages();
   try {
     STATE.data = await api('/api/bank/match');
+    loadPayers();
     await render();
     renderOverview();
     renderTransfers();
@@ -2470,6 +2596,12 @@ document.addEventListener('click', async (ev) => {
     const customer = t.dataset.learn
       || (($(`list`).querySelector(`[data-name="${t.dataset.learnfree}"]`) || {}).value || '').trim();
     if (!customer) return toast('Whose payment is it?', 'bad');
+    /* Only the typed box needs checking: a suggestion button already carries a name from the ledger. */
+    if (t.dataset.learnfree != null && Array.isArray(STATE.payers)) {
+      const hit = STATE.payers.find((c) => payerKey(c.name) === payerKey(customer));
+      if (!hit && !confirm(`"${customer}" is not a customer in Jarvis or in the QuickBooks snapshot.\n\nDeposits from this payer will not match any invoice.\n\nRemember it anyway?`)) return;
+      if (hit && !hit.ledger && !confirm(`"${hit.name}" is in QuickBooks but has no invoice in Jarvis, so a deposit cannot be matched to it here.\n\nRemember it anyway?`)) return;
+    }
     try {
       await api('/api/bank/aliases', { body: { descriptor: t.dataset.desc, customer, why: 'confirmed on the bank matching screen' } });
       toast(`Remembered: ${customer}`, 'good');

@@ -71,6 +71,31 @@ function suggest(descriptor) {
     return null;
 }
 
+// ── WHAT SHE HAS ALREADY CATEGORISED THE SAME WAY (Apsara, 2026-11-16: "enable self learn in accounting") ──────────────
+// Every Post she makes is already kept here with its description and account, so what she has taught Jarvis is read
+// straight from this store: there is no second store to drift, and Undo (which sets reversed_at) un-teaches it for free.
+// A SUGGESTION ONLY, like suggest() above: the dropdown opens on it and she still presses Post. It is offered only when
+// every live entry of the same kind of line went to ONE account, so a line she has filed two ways is asked about, not
+// guessed. "Same kind of line" = the description with every token that has a digit or an X-mask removed, so the date and
+// the confirmation number do not make each fee look new; a description too short to identify anything is never learned.
+function kindOf(descriptor) {
+    const words = String(descriptor || '').toLowerCase().split(/\s+/)
+        .map((w) => w.replace(/[^a-z0-9]/g, ''))
+        .filter((w) => w && !/\d/.test(w) && !/^x{3,}$/.test(w));
+    const k = words.join(' ');
+    return (words.length >= 2 && k.length >= 8) ? k : null;
+}
+function learned(descriptor) {
+    const k = kindOf(descriptor);
+    if (!k) return null;
+    const mine = list().filter((e) => e && !e.reversed_at && kindOf(e.descriptor) === k);
+    if (!mine.length) return null;
+    const accounts = new Set(mine.map((e) => String(e.account)));
+    if (accounts.size !== 1) return null;
+    const code = [...accounts][0];
+    return isOffered(code) ? { account: code, times: mine.length } : null;
+}
+
 // The key bankOut.keyOf gives the journal line this entry produces, so the
 // ledger row can be ticked against it. tests/bank-categorise.js proves it is
 // the same string by building the real journal.
@@ -217,4 +242,4 @@ function toTxs() {
     }));
 }
 
-module.exports = { FILE, list, categories, suggest, plan, post, reverse, undoForRow, toTxs, keyOf };
+module.exports = { FILE, list, categories, suggest, learned, kindOf, plan, post, reverse, undoForRow, toTxs, keyOf };

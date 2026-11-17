@@ -355,6 +355,123 @@ function addressBookExactMatch(name) {
   return addressBookCache.find(e => (e.aliases || []).some(a => a.toLowerCase() === q)) || null;
 }
 
+// ── "DID YOU MEAN ...?" ON THE SELLER / BUYER NAME (2026-11-15) ────────────
+// ── Ferrous / non-ferrous (Apsara, 2026-11-17) ──────────────────────────────
+// "when you type an item, as soon as they move to next box, ask them whether it is ferrous or non-ferrous."
+// Chosen with her: website AND phone app, loads AND sales; asked once per item NAME and then remembered
+// (the server keeps the list, helpers/itemMetal.js); the person typing must pick one, so the dialog has no
+// Cancel and the backdrop does nothing. Asked when the box is left, and again at Save for any row that got past
+// that (a row filled by a suggestion tap, or a saved load edited). The server does not insist on it, so a
+// load recorded by voice or by Scout, with no form to ask on, still saves. Same code on both screens
+// (dashboard/app/05-load-pricing.js, mobile-app/www/app/05-payment-roles.js).
+let itemMetalMap = null;                                   // item name key -> 'ferrous' | 'non-ferrous'
+const METAL_LABEL = { 'ferrous': 'Ferrous', 'non-ferrous': 'Non-ferrous' };
+const metalKey = (d) => String(d == null ? '' : d).toLowerCase().replace(/[^a-z0-9]/g, '');
+async function loadItemMetalMap() {
+  try { const r = await api('/api/loads/item-metal'); itemMetalMap = (r && r.types) || {}; }
+  catch (e) { if (!itemMetalMap) itemMetalMap = {}; }      // a failed lookup only means it asks once more
+}
+function askMetalType(desc) {
+  return new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.display = 'flex';
+    overlay.style.zIndex = '10050';
+    overlay.innerHTML = `
+      <div class="modal-shell" style="max-width:360px;">
+        <div class="modal-stripe"></div>
+        <div class="modal-body" style="padding:22px 24px 10px;">
+          <div style="font-size:15px; font-weight:600; color:var(--text-strong); line-height:1.4;">Is "${esc(desc)}" ferrous or non-ferrous?</div>
+          <div style="font-size:12px; color:var(--text-muted); margin-top:8px; line-height:1.5;">Ferrous is iron and steel (a magnet sticks). Non-ferrous is copper, aluminium, brass, stainless and the like.</div>
+        </div>
+        <div class="modal-foot" style="gap:10px;">
+          <button type="button" class="btn" data-metal="non-ferrous" style="flex:1; padding:12px;">Non-ferrous</button>
+          <button type="button" class="btn btn-primary" data-metal="ferrous" style="flex:1; padding:12px;">Ferrous</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    overlay.querySelectorAll('[data-metal]').forEach((b) => b.addEventListener('click', () => { overlay.remove(); resolve(b.dataset.metal); }));
+  });
+}
+function paintMetalChip(row) {
+  const hid = row.querySelector('.ld-item-metal');
+  const chip = row.querySelector('.ld-metal-chip');
+  const input = row.querySelector('.ld-item-desc-input');
+  if (!hid || !chip || !input) return;
+  chip.style.display = input.value.trim() ? '' : 'none';
+  chip.textContent = hid.value ? (METAL_LABEL[hid.value] || hid.value) + ' · change' : 'Ferrous or non-ferrous? Tap to choose';
+  chip.style.color = hid.value ? 'var(--text-muted)' : 'var(--danger, #c0392b)';
+}
+function setRowMetal(row, type) {
+  const hid = row.querySelector('.ld-item-metal');
+  const input = row.querySelector('.ld-item-desc-input');
+  if (!hid || !input) return;
+  hid.value = type || '';
+  hid.dataset.for = metalKey(input.value);
+  paintMetalChip(row);
+  syncItemsFromDom();
+}
+// One question at a time per row. `force` re-asks (the chip), otherwise a row that already has an answer for its
+// current name, or a name the server has learned, is settled without a dialog.
+function ensureRowMetal(row, force) {
+  if (row._metalAsk) return row._metalAsk;
+  const run = (async () => {
+    const input = row.querySelector('.ld-item-desc-input');
+    const hid = row.querySelector('.ld-item-metal');
+    if (!input || !hid || !row.isConnected) return;
+    const desc = input.value.trim();
+    const k = metalKey(desc);
+    if (!k) { hid.value = ''; hid.dataset.for = ''; paintMetalChip(row); return; }
+    if (!force && hid.value && hid.dataset.for === k) { paintMetalChip(row); return; }
+    if (!force) {
+      if (!itemMetalMap) await loadItemMetalMap();
+      const known = itemMetalMap[k];
+      if (known) { setRowMetal(row, known); return; }
+    }
+    const pick = await askMetalType(desc);
+    itemMetalMap = itemMetalMap || {};
+    itemMetalMap[k] = pick;
+    setRowMetal(row, pick);
+  })();
+  row._metalAsk = run;
+  run.then(() => { row._metalAsk = null; }, () => { row._metalAsk = null; });
+  return run;
+}
+async function ensureAllMetal() {
+  const rows = document.querySelectorAll('#ld_items .item-row');
+  for (const row of rows) await ensureRowMetal(row, false);
+}
+
+// Apsara: "Spelling variants as they type ask while creating load/sales that whether they mean this?"
+// Asked once, at Save, when the typed name is not exactly an existing one but looks like one. YES swaps in the
+// existing spelling; NO keeps what was typed. Nothing changes without a Yes, and a failed lookup never blocks saving.
+// Asked once per typed name per session, whatever the answer, so a spelling she meant is not questioned every time.
+// Same code on the website and the phone (dashboard/app/05-load-pricing.js, mobile-app/www/app/02-cache-catalogue.js).
+const partyAsked = new Set();
+async function confirmPartyName() {
+  const box = $('ld_seller');
+  if (!box) return;
+  const typed = box.value.trim();
+  if (!typed) return;
+  const mode = (typeof loadModalMode !== 'undefined' && loadModalMode === 'sale') ? 'sale' : 'purchase';
+  const key = mode + '|' + typed.toLowerCase().replace(/[^a-z0-9]/g, '');
+  if (partyAsked.has(key)) return;
+  partyAsked.add(key);
+  try {
+    if (addressBookExactMatch(typed)) return;      // a contact she saved on purpose
+    const r = await api('/api/loads/party-similar?kind=' + mode + '&name=' + encodeURIComponent(typed));
+    if (!r || r.known || !r.suggestions || !r.suggestions.length) return;
+    const top = r.suggestions[0];
+    const word = mode === 'sale' ? 'buyer' : 'seller';
+    const yes = await askYesNo('You typed "' + typed + '". Is that the same ' + word + ' as "' + top.name + '" (already on '
+      + top.rows + ' saved record' + (top.rows === 1 ? '' : 's') + ')?\n\nYes uses "' + top.name + '". No keeps "' + typed + '".');
+    if (yes) {
+      box.value = top.name;
+      try { box.dispatchEvent(new Event('blur')); } catch (e) { /* only fills a blank address from the address book */ }
+    }
+  } catch (e) { /* a failed lookup never blocks saving */ }
+}
+
 
 // Live-recomputes ONE row's net weight (gross - tare) and amount (net *
 // price) directly from that row's own inputs — called on every input event

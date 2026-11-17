@@ -1243,6 +1243,10 @@ function wireLoadsEvents() {
 
     const validationError = validateItemsBeforeSave(currentLoadItems);
     if (validationError) { $('loadModalErr').textContent = validationError; return; }
+    // 'Did you mean ...?' on the seller/buyer name (Apsara, 2026-11-15). Never blocks the save; see confirmPartyName.
+    await confirmPartyName();
+    // Ferrous / non-ferrous for any item row still without an answer (Apsara, 2026-11-17). Must be answered; see ensureAllMetal.
+    await ensureAllMetal();
 
     const btn = $('btnSaveLoad');
     const isEdit = !!editingLoadId;
@@ -1259,6 +1263,7 @@ function wireLoadsEvents() {
           tare_weight : (it.tare_weight ?? '') === '' ? 0 : it.tare_weight,
           price: it.price || null,
           unit : it.unit  || null,
+          metal_type: it.metal_type || null,
           gross_photo_base64: it.grossPhoto ? it.grossPhoto.base64 : null,
           gross_photo_mime  : it.grossPhoto ? it.grossPhoto.mime   : null,
           tare_photo_base64 : it.tarePhoto  ? it.tarePhoto.base64  : null,

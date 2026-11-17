@@ -157,8 +157,9 @@ section('B — both screens: a select, defaulting to lb');
                ['lb', 'nt', 'gt', 'mt', 'piece'].every((u) => list.includes(u)),
                JSON.stringify(list));
         } else {
-            ck('website:   offers lb and MT only — her call, display-only',
-               list.length === 2 && list.includes('lb') && list.includes('mt'),
+            // 2026-11-17: she asked for MT / gross ton / net ton on the website load and sale screens.
+            ck('website:   offers lb, MT, net ton and gross ton (not /piece, which stays in the app)',
+               list.length === 4 && ['lb', 'mt', 'nt', 'gt'].every((u) => list.includes(u)),
                JSON.stringify(list));
         }
         // The conversion check used to look for the literal `net / 2204.62`.
@@ -217,6 +218,11 @@ section('B — both screens: a select, defaulting to lb');
         ck(`${name}:   'lb' renders as lb`, selectedValue(render('lb')) === 'lb');
         ck(`${name}:   'mt' renders as MT`, selectedValue(render('mt')) === 'mt');
         ck(`${name}:   'MT' renders as MT too`, selectedValue(render('MT')) === 'mt');
+        if (name === 'website') {
+            ck('website:   a /net ton row opens as net ton, selectable', selectedValue(render('nt')) === 'nt' && !/value="nt"[^>]*disabled/.test(render('nt')), render('nt'));
+            ck('website:   a /gross ton row opens as gross ton, selectable', selectedValue(render('gt')) === 'gt' && !/value="gt"[^>]*disabled/.test(render('gt')), render('gt'));
+            ck('website:   a /piece row is still kept, disabled, so a save does not turn it into pounds', selectedValue(render('piece')) === 'piece' && /value="piece" selected disabled/.test(render('piece')), render('piece'));
+        }
     }
 }
 
@@ -447,8 +453,13 @@ section('E — the SALE side, in full');
 
     // The sale SCREEN is read-only for items; it has to be unambiguous.
     const obHtml = fs.readFileSync(path.join(ROOT, 'dashboard/outbound-loads.html'), 'utf8');
-    ck('the sale list marks a tonne rate as /MT', /perMt \? '\/MT' : ''/.test(obHtml));
-    ck('  and restates the net in tonnes beside it', /2204\.62/.test(obHtml));
+    // PROPERTY, not text (2026-11-17): evaluate the list's own price/net cell logic for each unit.
+    const cellLogic = obHtml.slice(obHtml.indexOf('const TON = '), obHtml.indexOf("const priceCell = (it.price ?? '—') + (tn ? tn.lab : '');") + "const priceCell = (it.price ?? '—') + (tn ? tn.lab : '');".length);
+    const cells = (unit, net) => new Function('it', 'l', 'esc', cellLogic + '; return { netCell, priceCell };')({ unit, price: 800, net_weight: net }, { weight_unit: 'lb' }, (x) => x);
+    ck('the sale list marks a tonne rate as /MT and restates the net in MT', cells('mt', 22046.2).priceCell === '800/MT' && /= 10\.000 MT/.test(cells('mt', 22046.2).netCell), JSON.stringify(cells('mt', 22046.2)));
+    ck('  a net-ton rate says /net ton and restates the net on the 2,000 lb ton', cells('nt', 30000).priceCell === '800/net ton' && /= 15\.000 net ton/.test(cells('nt', 30000).netCell), JSON.stringify(cells('nt', 30000)));
+    ck('  a gross-ton rate says /gross ton and restates the net on the 2,240 lb ton', cells('gt', 33600).priceCell === '800/gross ton' && /= 15\.000 gross ton/.test(cells('gt', 33600).netCell), JSON.stringify(cells('gt', 33600)));
+    ck('  a per-pound row is left exactly as it was (no suffix, no second figure)', cells('lb', 30000).priceCell === '800' && cells('', 30000).priceCell === '800' && !/=/.test(cells('lb', 30000).netCell), JSON.stringify(cells('lb', 30000)));
 
     // The sale PDF is the SAME generator as the purchase ticket (api.js passes
     // kind: 'sale'), so section D's work covers it — but prove it, because

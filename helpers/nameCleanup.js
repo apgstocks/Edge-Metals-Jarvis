@@ -141,6 +141,24 @@ const FIELDS = {
             { key: 'prepayments', file: cfg.PAYMENTS_FILE, shape: 'array', field: 'seller', label: 'prepayments' },
         ],
     },
+    // ── THE YARD'S OWN BUYERS (2026-11-15) ──────────────────────────────
+    // Apsara, 2026-11-14: "What if i want to clean the supplier/buyer names in similar way", then "yes" to Edge
+    // Yard only, suppliers and buyers together. A sale's buyer is stored on the sale and nowhere else that a
+    // rename must follow: a payment received against a sale points at it by load_id, not by name
+    // (helpers/payments.js), so there is no second store to move together. Issued PDFs keep the spelling they
+    // were issued with, same as items.
+    //
+    // yardScreenOnly: this field belongs to the Edge Yard screen (helpers/partyMaintenance.js). The Edge Metals
+    // "Clean up names" screen lists the fields without this flag, so it does not gain a tab (CLAUDE.md rule 1:
+    // the flag marks the NEW shape).
+    buyer: {
+        label: 'Buyer (Edge Yard)',
+        where: 'yard sales',
+        yardScreenOnly: true,
+        targets: [
+            { key: 'sales', file: cfg.OUTBOUND_LOADS_FILE, shape: 'array', field: 'buyer', label: 'yard sales', votes: true },
+        ],
+    },
 };
 
 const FIELD_KEYS = Object.keys(FIELDS);
@@ -480,15 +498,19 @@ async function apply(planned) {
 // ── AND THE WAY BACK ────────────────────────────────────────────────────────
 // Restores supplier_was on exactly the rows carrying this merge id. A row she
 // typed herself cannot carry one, so this cannot un-rename anything else.
-async function undo(mergeId) {
+async function undo(mergeId, opts = {}) {
     if (!mergeId) throw new Error('which merge? a merge id is required');
+    // opts.fields (2026-11-15): walk only these fields' stores. The default is every field, as it always was, so
+    // the Edge Metals screen is unchanged. The Edge Yard screen passes its own two, so undoing a yard rename
+    // never opens, locks or rewrites an Edge Metals ledger file.
+    const walk = Array.isArray(opts.fields) && opts.fields.length ? opts.fields : FIELD_KEYS;
     let restored = 0;
     // Every field's stores, because a merge id names one field but the caller
     // only has the id — and walking the wrong store is harmless (nothing
     // there carries this id) while missing the right one is not.
     const seen = new Set();
     const all = [];
-    for (const k of FIELD_KEYS) {
+    for (const k of walk) {
         for (const t of targetsFor(k)) {
             const sig = `${t.file}|${t.field}`;
             if (seen.has(sig)) continue;

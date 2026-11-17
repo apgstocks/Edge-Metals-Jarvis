@@ -1654,6 +1654,11 @@ function start() {
 
     // Apsara, 2026-10-12: "constantly monitoring cost". Hourly; speaks at most
     // once per Pacific day. See helpers/aiCostWatch.js.
+    // Apsara, 2026-11-15: a weekly READ-ONLY score of the marks she gave in data/evalset.txt (never rebuilds it).
+    // Silent unless the numbers changed. See helpers/evalWeekly.js.
+    cron.schedule('40 7 * * 1',   () => require('./helpers/evalWeekly').weeklyLine()
+        .then((line) => line && _sendToManager(line))
+        .catch(e => console.error('[SCHED] eval-weekly:', e.message)), TZ);
     cron.schedule('20 * * * *',   () => require('./helpers/aiCostWatch').check().catch(e => console.error('[SCHED] ai-cost-watch:', e)), TZ);
     // ── 05:55 — THE ROLLING QUICKBOOKS SNAPSHOT ─────────────────────────
     // Apsara, 2026-10-28: "it should be a rolling date..from 01-01-2026 to

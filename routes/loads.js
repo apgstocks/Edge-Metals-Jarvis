@@ -88,6 +88,20 @@ module.exports = function (app, ctx) {
             }));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
+    // "Did you mean ...?" while a load or sale is being typed (Apsara, 2026-11-15). Read-only. Under /api/loads, which
+    // staff may reach, because staff are the people typing these names. kind=purchase|sale. See
+    // helpers/partyMaintenance.js similar().
+    // Ferrous / non-ferrous, learned per item name (Apsara, 2026-11-17). The apps read this to know which item
+    // names they must still ask about. Read-only, under /api/loads so staff can reach it. Registered before
+    // /api/loads/:id. See helpers/itemMetal.js.
+    app.get('/api/loads/item-metal', (req, res) => {
+        try { res.json({ types: require('./helpers/itemMetal').all() }); }
+        catch (e) { res.status(500).json({ error: e.message }); }
+    });
+    app.get('/api/loads/party-similar', (req, res) => {
+        try { res.json(require('./helpers/partyMaintenance').similar(req.query.kind, req.query.name)); }
+        catch (e) { res.status(400).json({ error: e.message }); }
+    });
     app.get('/api/loads/inventory', (req, res) => {
         try {
             const { loadLoads, getInventoryReport } = require('./helpers/loads');

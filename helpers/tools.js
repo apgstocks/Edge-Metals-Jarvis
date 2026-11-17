@@ -228,6 +228,20 @@ const TOOLS = {
         },
     },
 
+    // Apsara, 2026-11-15: "why did the number become -12290 ... no guesses, only proper reasoning". Read-only; Edge Yard's
+    // own loads and sales only. See helpers/stockExplain.js.
+    explain_stock: {
+        kind: 'read',
+        description: 'EXPLAIN why one item\'s stock on hand is what it is, especially when it is negative: lines up every purchase and every sale of that item with a running balance, finds the day it went below zero, and checks its total against the Inventory screen. Use for "why is X negative", "why did the number become -N", "how is on-hand worked out". Say ONLY what its findings state. If it says the books cannot tell, say that. Never guess a cause.',
+        params: { item: { type: 'string', required: true, describe: 'the item name exactly as on the Inventory screen' } },
+        run: async (p) => {
+            const { loadLoads, getInventoryReport } = require('./loads');
+            const { loadOutboundLoads } = require('./outboundLoads');
+            const inbound = loadLoads();
+            return require('./stockExplain').explainStock({ inbound, outbound: loadOutboundLoads(), item: str(p.item), screenRows: getInventoryReport(inbound).byType });
+        },
+    },
+
     // ── THE HALF OF THE YARD IT COULD NOT SEE ────────────────────────────
     // Apsara, 2026-09-16: "Yard assistant should have complete knowledge abou
     // yard."

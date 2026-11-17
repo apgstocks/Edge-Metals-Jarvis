@@ -222,6 +222,7 @@ function openEditLoadModal(load) {
     tare_weight : (it.tare_weight ?? '') === '' ? '0' : it.tare_weight,
     price: fmtRate(it.price),
     unit : it.unit || '',
+    metal_type: it.metal_type || '',
     grossPhoto: null, tarePhoto: null,
     gross_photo_link: it.gross_photo_link || null, gross_photo_drive_id: it.gross_photo_drive_id || null,
     tare_photo_link : it.tare_photo_link  || null, tare_photo_drive_id : it.tare_photo_drive_id  || null,

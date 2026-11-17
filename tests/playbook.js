@@ -113,7 +113,10 @@ check('forget removes one rule and leaves the rest', () => {
 // self learn as well", then "yes" to all four design questions (claude/scout-self-learning-design-2026-11-14.md in
 // the Jarvis project). It uses the EDGE YARD partition only; the Playbook (Edge Metals) is untouched. Its own
 // end-to-end section is tests/scout-learning.js.
-const ALLOWED_CALLERS = ['helpers/scoutLearning.js'];
+// helpers/taughtRecall.js reads the EDGE METALS notes (what she taught with scripts/notes.js), with her yes:
+// Apsara, 2026-11-15, "yes" to "recall in decisions". Read-only, advisory, OFF unless JARVIS_TAUGHT_RECALL=1; it does
+// not read the Playbook. Its end-to-end section is tests/taught-recall.js.
+const ALLOWED_CALLERS = ['helpers/scoutLearning.js', 'helpers/taughtRecall.js'];
 check('no existing file reads the Playbook or the disk (so no behaviour has changed)', () => {
     const uses = /(helpers\/|\.\/|\.\.\/)(playbook|diskStore|disk)(\/|['"])/;
     const scan = (dir, rel) => {

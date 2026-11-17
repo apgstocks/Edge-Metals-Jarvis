@@ -232,8 +232,8 @@ const PU = require(path.join(ROOT, 'helpers/priceUnits'));
     const webOpts = optionsOf(web);
     ck('the app offers all five', !!appOpts && PU.ORDER.every((u) => appOpts.includes(u)),
        JSON.stringify(appOpts));
-    ck('the website offers only lb and MT — her call',
-       !!webOpts && webOpts.length === 2 && webOpts.includes('lb') && webOpts.includes('mt'),
+    ck('the website offers lb, MT, net ton and gross ton (2026-11-17), but not /piece',
+       !!webOpts && webOpts.length === 4 && ['lb', 'mt', 'nt', 'gt'].every((u) => webOpts.includes(u)) && !webOpts.includes('piece'),
        JSON.stringify(webOpts));
     ck('  but it can still COMPUTE a net ton, or it would show a wrong figure',
        /LB_PER_UNIT/.test(web) && /nt/.test((web.match(/LB_PER_UNIT\s*=\s*\{[^}]*\}/) || [''])[0]));
