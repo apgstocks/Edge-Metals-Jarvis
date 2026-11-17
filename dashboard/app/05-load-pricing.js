@@ -948,6 +948,10 @@ function applyLoadModalMode(mode) {
   // typed. Same two inputs, relabelled, so every downstream handler keeps
   // working on the same element ids.
   if ($('ld_party_label')) $('ld_party_label').textContent = sale ? 'Buyer' : 'Seller';
+  // The picker for OUR side of the record: buyer on a purchase, seller on a sale. Reset to the
+  // default on every open; openEditLoadModal sets the saved one after this runs.
+  if ($('ld_company_label')) $('ld_company_label').textContent = sale ? 'Seller (our company)' : 'Buyer (our company)';
+  if (typeof setLoadCompany === 'function') setLoadCompany('Edge Trading');
   if ($('ld_party_addr_label')) $('ld_party_addr_label').textContent = sale ? 'Buyer address' : 'Seller address';
   if ($('ld_seller')) $('ld_seller').placeholder = sale ? 'Buyer name' : 'Seller name';
   // Phone is a purchase-side convenience (the "send ticket to seller" button)
@@ -1106,6 +1110,8 @@ function openEditLoadModal(load) {
   if ($('ld_date'))            $('ld_date').value            = toUsDate(load.date) || '';
   if ($('ld_seller'))          $('ld_seller').value          = load.seller || '';
   if ($('ld_seller_address'))  $('ld_seller_address').value  = load.seller_address || '';
+  // Our side of the record, as saved (purchase: buyer; sale: seller_company). Older records had neither, so Edge Trading.
+  if (typeof setLoadCompany === 'function') setLoadCompany(loadModalMode === 'sale' ? load.seller_company : load.buyer);
   if ($('ld_seller_phone'))    $('ld_seller_phone').value    = load.seller_phone || '';
   editingLoadDescription = load.description || '';
   if ($('ld_desc'))            $('ld_desc').value            = load.description || '';
@@ -1226,6 +1232,7 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
+        <button class="btn btn-print-po" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" title="Purchase Order PDF made from this record. Nothing is saved." style="font-size:11px; padding:5px 10px;">Print PO</button>
         <!-- Renumber button REMOVED 2026-08-17 per Apsara ("remove the
              renumber button in app for both staff and admin access",
              confirmed "remove it everywhere, no exceptions") — mirrors

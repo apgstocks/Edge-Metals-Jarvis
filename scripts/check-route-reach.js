@@ -99,7 +99,11 @@ function argsAt(src, openIdx) {
 
 function callsIn(src) {
     const out = [];
-    const re = /\bapi\s*\(/g;
+    // api() AND fetch(): a PDF answer cannot go through api() (it parses JSON), so
+    // the BOL and Print PO / PO tab screens call fetch() with the same literal
+    // path. Without this a route reached only that way reads as dead.
+    // Added 2026-11-17 with the PO tab rather than excusing it in BY_DESIGN.
+    const re = /\b(?:api|fetch)\s*\(/g;
     for (const m of re.exec ? [...src.matchAll(re)] : []) {
         const args = argsAt(src, m.index + m[0].length - 1);
         if (args === null) continue;

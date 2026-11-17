@@ -218,6 +218,9 @@ function buildRecord(entry) {
         date          : entry.date || null,
         buyer         : String(entry.buyer).trim(),
         buyer_address : entry.buyer_address || null,
+        // Which of her companies is SELLING (2026-11-17). A label only — null means
+        // Edge Trading, as every sale before today. See helpers/loadCompany.js.
+        seller_company: require('./loadCompany').canon(entry.seller_company),
         trucker_name  : entry.trucker_name || null,
         // ── THE TRUCKER'S PROMISED DELIVERY (2026-09-10) ──────────────────
         // Apsara: "trucker will give estimated delivery date and time. I want
@@ -333,6 +336,9 @@ async function editOutboundLoad(id, entry) {
     // it back in transit and let a new enquiry be scheduled against it.
     const prior = getOutboundLoad(id);
     if (prior) {
+        // A caller that never mentions the picker (the APK already on her phone,
+        // the voice path) must not blank a company she chose.
+        if (entry.seller_company === undefined) patch.seller_company = prior.seller_company || null;
         patch.delivery_status = prior.delivery_status || 'in_transit';
         patch.delivered_at = prior.delivered_at || null;
         // ── AND MUST NOT FREE THE DRAFT TO BECOME A SECOND LOAD ──────────

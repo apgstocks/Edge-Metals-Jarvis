@@ -249,6 +249,8 @@ module.exports = function (app, ctx) {
                 date: b.date, seller: b.seller, description: b.description,
                 seller_address: b.seller_address, seller_phone: b.seller_phone,
                 buyer: b.buyer, buyer_address: b.buyer_address,
+                // Which company BUYS (2026-11-17). Only when sent: absent must stay absent (loadCompany.chooseBuyer).
+                ...(b.buyer_company !== undefined ? { buyer_company: b.buyer_company } : {}),
                 items: b.items, weight_unit: b.weight_unit,
                 // Optional haulage deducted from what the seller is paid.
                 // Unconditional here, unlike the edit route below: a CREATE
@@ -418,6 +420,8 @@ module.exports = function (app, ctx) {
                 date: b.date, seller: b.seller, description: b.description,
                 seller_address: b.seller_address, seller_phone: b.seller_phone,
                 buyer: b.buyer, buyer_address: b.buyer_address,
+                // Which company BUYS (2026-11-17). Only when sent: absent must stay absent (loadCompany.chooseBuyer).
+                ...(b.buyer_company !== undefined ? { buyer_company: b.buyer_company } : {}),
                 items: b.items, weight_unit: b.weight_unit,
                 // ── FORWARDED ONLY IF THE CLIENT SENT IT ─────────────────
                 // Spread, not listed, and this is the point of the whole

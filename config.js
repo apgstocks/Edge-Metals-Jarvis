@@ -221,6 +221,8 @@ const FILES = {
     // deleting a BOL must not hand its number to the next document, and a
     // counter living inside the list it counts would do exactly that.
     BOL_COUNTERS_FILE: path.join(DATA_DIR, 'bol_counters.json'),
+    // Purchase-order numbers handed out by Print PO on a load/sale (helpers/poNumbers.js).
+    PO_COUNTERS_FILE: path.join(DATA_DIR, 'po_counters.json'),
 
     // ── WHICH FIELDS EACH CUSTOMER'S BOL CARRIES (2026-09-16) ────────────
     // Apsara: "For different customer,i can have different field in bol".

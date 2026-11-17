@@ -407,7 +407,8 @@ async function addLoad(entry) {
         // raw here (not @c.us-suffixed) since this is a data field, not a
         // chat id; the send-to-seller route builds the chat id from it.
         seller_phone  : normalizeSellerPhone(entry.seller_phone),
-        buyer         : entry.buyer || null,
+        // A label, not a ledger: see helpers/loadCompany.js.
+        buyer         : require('./loadCompany').chooseBuyer(entry, null),
         buyer_address : entry.buyer_address || null,
         description   : entry.description || '',
         items,
@@ -527,7 +528,7 @@ async function editLoad(id, entry) {
         seller        : entry.seller || null,
         seller_address: entry.seller_address || null,
         seller_phone  : normalizeSellerPhone(entry.seller_phone),
-        buyer         : entry.buyer || null,
+        buyer         : entry.buyer || null, // settled against what is on file inside the lock, below
         buyer_address : entry.buyer_address || null,
         description   : entry.description || '',
         items,
@@ -568,7 +569,9 @@ async function editLoad(id, entry) {
     const loads = await mutateJson(cfg.LOADS_FILE, [], (loads) => {
         const l = loads.find(x => x.id === id);
         if (l) {
+            const priorBuyer = l.buyer;
             Object.assign(l, patch, { updated_at: new Date().toISOString() });
+            l.buyer = require('./loadCompany').chooseBuyer(entry, priorBuyer);
             if (truckingPatch) Object.assign(l, truckingPatch);
             // Recomputed here, inside the lock, from whatever SURVIVED the
             // two assignments above — not from `entry`. The items can change

@@ -14,7 +14,7 @@ async function renderDocumentsTab() {
     <section style="max-width:600px; margin:0 auto; padding:20px 16px 60px;">
       <div style="font-family:var(--font-mono); font-size:10.5px; letter-spacing:.14em; text-transform:uppercase; color:var(--text-muted); margin-bottom:12px;">Documents</div>
       <div style="display:flex; gap:4px; margin-bottom:18px; border-bottom:1px solid var(--border-subtle);">
-        ${[['proforma', 'Proforma'], ['invoice', 'Invoice'], ['bol', 'BOL']].map(([id, label]) => `
+        ${[['proforma', 'Proforma'], ['invoice', 'Invoice'], ['bol', 'BOL'], ['po', 'PO']].map(([id, label]) => `
           <button class="btn doc-subtab-btn" data-subtab="${id}" style="flex:1; border:none; border-radius:0; border-bottom:2px solid ${docsSubTab === id ? 'var(--accent)' : 'transparent'}; background:transparent; padding:9px 10px; font-size:12.5px; font-weight:${docsSubTab === id ? '700' : '500'}; color:${docsSubTab === id ? 'var(--text-strong)' : 'var(--text-muted)'};">${label}</button>`).join('')}
       </div>
       <div id="docBody"></div>
@@ -29,6 +29,7 @@ async function renderDocumentsTab() {
   // the consignee on the form. Drawn first rather than awaited so the tab
   // is never blank while a layout request is in flight.
   else if (docsSubTab === 'bol') { renderBolForm(); bolwLoadLayout(bolw && bolw.consignee); }
+  else if (docsSubTab === 'po') renderPoForm();
   else renderInvFlow();
 }
 
@@ -676,3 +677,149 @@ async function bolSubmit(preview) {
   }
 }
 
+// ── PURCHASE ORDER (Apsara, 2026-11-17) ───────────────────────────────────
+// "PO not there in docs of mobile app" — the PO tab beside BOL. Her answers:
+// the same fields as the website's Documents → Purchase order tab; nothing is
+// saved, it only generates the PDF; the number is suggested as PO-YYMMDD-001
+// and counted per issuing company.
+//
+// This only collects and sends. The checks, the sums and the sheet are the
+// server's (helpers/poForm.js, helpers/poSheet.js — the website's own sheet),
+// so the phone and the website cannot print different POs. ONE COLUMN, like
+// the BOL form.
+let pow = null;
+let poOptions = null;
+function resetPoForm() {
+  const t = new Date();
+  const iso = `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+  pow = { company_id: '', supplier: '', supplier_address: '', number: '', numberAuto: true, date: iso, required: '', terms: '',
+    deliver_id: '', ship_to: '', lines: [{ desc: '', qty: '', unit: 'MT', price: '', price2: '' }], two: false, label_a: 'Clean', label_b: 'Dirty',
+    other: '', notes: '', signer: 'Chandra Bose', status: '' };
+}
+async function poLoadOptions() {
+  if (poOptions) return poOptions;
+  poOptions = await api('/api/po/options');
+  return poOptions;
+}
+async function poSuggestNumber() {
+  if (!pow.company_id || !pow.numberAuto) return;
+  try {
+    const r = await api(`/api/po/next-number?company_id=${encodeURIComponent(pow.company_id)}&date=${encodeURIComponent(pow.date)}`);
+    if (pow.numberAuto) { pow.number = r.number; if ($('pow_number')) $('pow_number').value = r.number; }
+  } catch (e) { /* she can type one */ }
+}
+function powSync() {
+  if (!pow || !$('pow_company')) return;
+  const v = (id) => ($(id) ? $(id).value : '');
+  pow.company_id = v('pow_company'); pow.supplier = v('pow_supplier'); pow.supplier_address = v('pow_supplier_address');
+  pow.date = v('pow_date'); pow.required = v('pow_required'); pow.terms = v('pow_terms'); pow.ship_to = v('pow_shipto');
+  pow.other = v('pow_other'); pow.notes = v('pow_notes'); pow.signer = v('pow_signer');
+  // The two label boxes exist only while the option is on; reading them when absent would blank 'Clean'/'Dirty'.
+  if ($('pow_two')) pow.two = $('pow_two').checked;
+  if ($('pow_label_a')) pow.label_a = v('pow_label_a');
+  if ($('pow_label_b')) pow.label_b = v('pow_label_b');
+  document.querySelectorAll('#powLines .pow-line').forEach((row, i) => {
+    if (!pow.lines[i]) return;
+    row.querySelectorAll('[data-f]').forEach((el) => { pow.lines[i][el.dataset.f] = el.value; });
+  });
+}
+async function renderPoForm() {
+  if (!pow) resetPoForm();
+  $('docBody').innerHTML = '<div style="font-size:13px; color:var(--text-muted);">Loading…</div>';
+  let o;
+  try { o = await poLoadOptions(); } catch (e) {
+    $('docBody').innerHTML = `<div style="font-size:13px; color:var(--danger, #c0392b);">Could not load the PO tab: ${esc(e.message)}</div>`;
+    return;
+  }
+  const w = pow;
+  const fld = (id, label, val, type, ph) => `<div class="field"><label for="${id}">${label}</label><input id="${id}" type="${type || 'text'}" value="${esc(val || '')}" ${ph ? `placeholder="${esc(ph)}"` : ''} autocomplete="off"></div>`;
+  const lineHtml = (l, i) => `
+    <div class="pow-line" style="border:1px solid var(--border-subtle); border-radius:8px; padding:10px; margin-bottom:8px;">
+      <div class="field" style="margin-bottom:6px;"><label>Description</label><input data-f="desc" value="${esc(l.desc)}" placeholder="e.g. Copper birch/cliff" autocomplete="off"></div>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+        <div class="field" style="margin:0;"><label>Qty</label><input data-f="qty" inputmode="decimal" value="${esc(l.qty)}" autocomplete="off"></div>
+        <div class="field" style="margin:0;"><label>Unit</label><select data-f="unit">${o.units.map((u) => `<option${l.unit === u ? ' selected' : ''}>${esc(u)}</option>`).join('')}</select></div>
+        <div class="field" style="margin:0;"><label>${w.two ? 'Price — ' + esc(w.label_a || 'first') : 'Unit price'}</label><input data-f="price" inputmode="decimal" value="${esc(l.price)}" autocomplete="off"></div>
+        ${w.two ? `<div class="field" style="margin:0;"><label>Price — ${esc(w.label_b || 'second')}</label><input data-f="price2" inputmode="decimal" value="${esc(l.price2)}" autocomplete="off"></div>` : '<div></div>'}
+      </div>
+      ${w.lines.length > 1 ? `<button type="button" class="btn pow-rm" data-i="${i}" style="margin-top:8px; font-size:11px; padding:5px 10px;">Remove item</button>` : ''}
+    </div>`;
+  $('docBody').innerHTML = `
+    <div style="font-size:13px; color:var(--text-muted); margin-bottom:14px; line-height:1.55;">Purchase order to a supplier. Nothing is saved; this makes the PDF.</div>
+    <div class="field"><label for="pow_company">Issuing company</label>
+      <select id="pow_company"><option value="">Select the company…</option>${o.companies.map((c) => `<option value="${esc(c.id)}"${w.company_id === c.id ? ' selected' : ''}>${esc(c.company)}</option>`).join('')}</select></div>
+    <div class="field" style="position:relative;"><label for="pow_supplier">Supplier</label>
+      <input id="pow_supplier" placeholder="Start typing a supplier" autocomplete="off" value="${esc(w.supplier)}"><div id="powSupplierList" class="ac-dropdown hidden"></div></div>
+    <div class="field"><label for="pow_supplier_address">Supplier address</label><textarea id="pow_supplier_address" rows="3" placeholder="Fills in when you pick a name">${esc(w.supplier_address)}</textarea></div>
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">
+      ${fld('pow_number', 'PO number', w.number, 'text', 'Pick a company')}
+      ${fld('pow_date', 'PO date', w.date, 'date')}
+      ${fld('pow_required', 'Required by', w.required, 'date')}
+      <div class="field"><label for="pow_terms">Payment terms</label><input id="pow_terms" list="powTermsList" value="${esc(w.terms)}" placeholder="e.g. Net 7" autocomplete="off">
+        <datalist id="powTermsList"><option value="Payment on delivery"></option><option value="Net 7"></option><option value="Net 15"></option><option value="Net 30"></option><option value="50% advance, balance on delivery"></option></datalist></div>
+    </div>
+    <div class="field"><label for="pow_deliver">Deliver to</label>
+      <select id="pow_deliver"><option value="">Choose where it is delivered…</option>${o.deliver.map((d) => `<option value="${esc(d.id)}"${w.deliver_id === d.id ? ' selected' : ''}>${esc(d.label)}${d.address ? ' — ' + esc(d.address) : ''}</option>`).join('')}<option value="other"${w.deliver_id === 'other' ? ' selected' : ''}>Other address…</option></select></div>
+    <div class="field"><label for="pow_shipto">Delivery address</label><textarea id="pow_shipto" rows="3" placeholder="Name on the first line, then the address">${esc(w.ship_to)}</textarea></div>
+    <div style="display:flex; align-items:center; justify-content:space-between; margin:16px 0 8px;">
+      <div style="font-size:13px; font-weight:700; color:var(--text-strong);">Items</div>
+      <label style="font-size:12px; display:flex; gap:6px; align-items:center;"><input type="checkbox" id="pow_two"${w.two ? ' checked' : ''}> Price depends on condition</label>
+    </div>
+    ${w.two ? `<div style="display:grid; grid-template-columns:1fr 1fr; gap:10px;">${fld('pow_label_a', 'First option', w.label_a)}${fld('pow_label_b', 'Second option', w.label_b)}</div>` : ''}
+    <div id="powLines">${w.lines.map(lineHtml).join('')}</div>
+    <button type="button" class="btn" id="powAddLine" style="font-size:12px; padding:6px 12px; margin-bottom:12px;">+ Add item</button>
+    ${fld('pow_other', 'Freight / other charges (optional, "-" for a deduction)', w.other, 'text')}
+    <div class="field"><label for="pow_notes">Notes &amp; conditions</label><textarea id="pow_notes" rows="3">${esc(w.notes)}</textarea></div>
+    ${fld('pow_signer', 'Signed by', w.signer)}
+    <div id="powStatus" style="font-size:12.5px; line-height:1.5; margin:10px 0; color:var(--text-muted); white-space:pre-line;">${esc(w.status)}</div>
+    <div style="display:flex; gap:8px;"><button class="btn btn-primary" id="powGo" style="flex:1;">Generate PDF</button><button class="btn" id="powClear">Clear</button></div>`;
+
+  $('pow_company').addEventListener('change', async () => { powSync(); pow.numberAuto = true; pow.number = ''; $('pow_number').value = ''; await poSuggestNumber(); });
+  $('pow_date').addEventListener('change', async () => { powSync(); await poSuggestNumber(); });
+  $('pow_number').addEventListener('input', () => { pow.number = $('pow_number').value; pow.numberAuto = !pow.number.trim(); });
+  $('pow_deliver').addEventListener('change', () => {
+    const v = $('pow_deliver').value; pow.deliver_id = v;
+    const d = o.deliver.find((x) => x.id === v);
+    if (d) $('pow_shipto').value = d.label + '\n' + d.address; else $('pow_shipto').value = '';
+    powSync();
+  });
+  $('pow_shipto').addEventListener('input', () => { if (pow.deliver_id && pow.deliver_id !== 'other') { pow.deliver_id = 'other'; $('pow_deliver').value = 'other'; } });
+  $('pow_two').addEventListener('change', () => { powSync(); renderPoForm(); });
+  ['pow_label_a', 'pow_label_b'].forEach((id) => { if ($(id)) $(id).addEventListener('change', () => { powSync(); renderPoForm(); }); });
+  $('powAddLine').addEventListener('click', () => { powSync(); pow.lines.push({ desc: '', qty: '', unit: pow.lines.length ? pow.lines[pow.lines.length - 1].unit : 'MT', price: '', price2: '' }); renderPoForm(); });
+  document.querySelectorAll('.pow-rm').forEach((b) => b.addEventListener('click', () => { powSync(); pow.lines.splice(Number(b.dataset.i), 1); renderPoForm(); }));
+  $('powClear').addEventListener('click', () => { resetPoForm(); renderPoForm(); });
+  $('powGo').addEventListener('click', poSubmit);
+  wireDocTypeahead('pow_supplier', 'powSupplierList', (entry) => {
+    pow.supplier = docConsigneeName(entry); pow.supplier_address = entry.raw || '';
+    $('pow_supplier').value = pow.supplier; $('pow_supplier_address').value = pow.supplier_address;
+  }, () => {});
+  poSuggestNumber();
+}
+async function poSubmit() {
+  powSync();
+  const set = (m) => { pow.status = m; if ($('powStatus')) $('powStatus').textContent = m; };
+  const btn = $('powGo');
+  btn.disabled = true; set('Generating…');
+  try {
+    const res = await fetch(API_BASE + '/api/po/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+      body: JSON.stringify({ company_id: pow.company_id, supplier: pow.supplier, supplier_address: pow.supplier_address, number: pow.number,
+        date: pow.date, required: pow.required, terms: pow.terms, ship_to: pow.ship_to, lines: pow.lines, two: pow.two,
+        label_a: pow.label_a, label_b: pow.label_b, other: pow.other, notes: pow.notes, signer: pow.signer }),
+    });
+    if (!res.ok) {
+      const j = await res.json().catch(() => ({}));
+      throw new Error((j.problems && j.problems.length ? j.problems.map((p) => '• ' + p).join('\n') : j.error) || `PO failed (${res.status})`);
+    }
+    const blob = await res.blob();
+    if (!blob.size) throw new Error('the PO came back empty');
+    const number = res.headers.get('X-PO-Number') || pow.number || 'PO';
+    await deliverExportedFile(blob, `${number}.pdf`, 'pdf');
+    // The number is spent: the next PO suggests the one after it.
+    pow.numberAuto = true; pow.number = '';
+    set(`${number} ready. Nothing was saved.`);
+    poSuggestNumber();
+  } catch (e) { set(e.message); } finally { btn.disabled = false; }
+}

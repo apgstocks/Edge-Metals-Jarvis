@@ -805,6 +805,15 @@ function renderLoads(loads) {
               <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
           </div>
+          <!-- Which of her companies is on the other side of this record
+               (Apsara, 2026-11-17): the BUYER on a purchase, the SELLER on a
+               sale. A label only: books, stock and payments are unchanged
+               (helpers/loadCompany.js). Defaults to Edge Trading, which is
+               what every record has always been. -->
+          <div class="field" id="ld_company_wrap" style="margin-top:14px; max-width:260px;">
+            <label id="ld_company_label" for="ld_company">Buyer (our company)</label>
+            <select id="ld_company"><option value="Edge Trading">Edge Trading</option><option value="Edge Metals">Edge Metals</option><option value="AAA Investment">AAA Investment</option></select>
+          </div>
           <div class="ld-grid-2" id="ld_party_row2" style="margin-top:14px;">
             <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
             <!-- Optional, per Apsara 2026-08-17. Only used server-side to
@@ -1319,6 +1328,9 @@ function wireLoadsEvents() {
       const payload = {
         date: toIsoDate($('ld_date').value) || null,
         buyer: BUYER_FIXED_NAME,
+        // Which of her companies is on the other side (2026-11-17); the server reads the one that fits the kind.
+        buyer_company: $('ld_company') ? $('ld_company').value : undefined,
+        seller_company: $('ld_company') ? $('ld_company').value : undefined,
         seller: $('ld_seller').value.trim() || null,
         seller_address: $('ld_seller_address').value.trim() || null,
         seller_phone: normalizeSellerPhone($('ld_seller_phone').value),
@@ -1364,6 +1376,7 @@ function wireLoadsEvents() {
           date: payload.date,
           buyer: payload.seller,
           buyer_address: payload.seller_address,
+          seller_company: payload.seller_company,   // which of her companies sells (2026-11-17)
           description: payload.description,
           weight_unit: payload.weight_unit,
           items: payload.items,
@@ -1767,6 +1780,7 @@ function wireDeckEvents() {
     ev.stopPropagation();
     openSignPad(btn.dataset.id);
   }));
+  document.querySelectorAll('.btn-print-po').forEach(btn => btn.addEventListener('click', (ev) => { ev.stopPropagation(); printPoFor(btn); }));
   document.querySelectorAll('.btn-send-seller').forEach(btn => btn.addEventListener('click', (ev) => {
     ev.stopPropagation();
     const load = loadsCache.find(l => l.id === btn.dataset.id);
@@ -1877,3 +1891,48 @@ let loadKindFilter = (() => {
     return LOAD_KINDS.some(([k]) => k === v) ? v : 'all';
   } catch (e) { return 'all'; }
 })();
+
+// ── Print PO from a load or a sale (Apsara, 2026-11-17: "for now print it in
+// load/sale") ──────────────────────────────────────────────────────────────
+// Asks the server for the next PO number (PO-YYMMDD-001, counted per issuing
+// company), lets her change it, then fetches the PDF made from this record.
+// NOTHING IS SAVED but the counter. The server does the arithmetic and the
+// layout (helpers/poFromRecord.js, poSheet.js); this only asks and delivers.
+async function printPoFor(btn) {
+  const kind = btn.dataset.kind === 'sale' ? 'sale' : 'purchase';
+  const id = btn.dataset.id;
+  const label = btn.textContent;
+  const restore = () => { btn.disabled = false; btn.textContent = label; };
+  btn.disabled = true; btn.textContent = 'Preparing…';
+  try {
+    const sug = await api(`/api/po/next-number?kind=${kind}&id=${encodeURIComponent(id)}`);
+    restore();
+    const typed = await askText(`PO number for ${kind === 'sale' ? 'sale' : 'load'} ${id}\n${sug.company} — change it if you need to.`, sug.number);
+    if (typed === null) return;
+    btn.disabled = true; btn.textContent = 'Generating…';
+    const res = await fetch(API_BASE + '/api/po/from-record', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + getToken() },
+      body: JSON.stringify({ kind, id, number: String(typed).trim() }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || `PO failed (${res.status})`);
+    const blob = await res.blob();
+    if (!blob.size) throw new Error('the PO came back empty');
+    const number = res.headers.get('X-PO-Number') || String(typed).trim() || 'PO';
+    await deliverExportedFile(blob, `${number}.pdf`, 'pdf');
+  } catch (err) {
+    alert('Could not make the PO: ' + err.message);
+  } finally { restore(); }
+}
+
+// ── Which company: Edge Trading / Edge Metals / AAA Investment (2026-11-17) ──
+// A <select> set to a value that is not in its list silently becomes "" (that
+// is how the pay modal once posted an empty mode), so every value goes through
+// here first and always lands on one of the three.
+function loadCompanyValue(name) {
+  const s = String(name || '').toLowerCase();
+  if (/metal/.test(s)) return 'Edge Metals';
+  if (/aaa/.test(s)) return 'AAA Investment';
+  return 'Edge Trading';
+}
+function setLoadCompany(name) { if ($('ld_company')) $('ld_company').value = loadCompanyValue(name); }

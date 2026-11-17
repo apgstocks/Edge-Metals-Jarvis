@@ -18,6 +18,99 @@ module.exports = function (app, ctx) {
         res.json({ signature: require('./helpers/signature').signatureDataUrl() });
     });
 
+    // ── PRINT PO FROM A LOAD OR A SALE (2026-11-17) ──────────────────────
+    // Apsara: "for now print it in load/sale" — phone app and website. Reads
+    // the record, prints the same sheet as Documents → Purchase order, saves
+    // NOTHING (her answer: "No, just generate the PDF"). Admin only, like the
+    // BOL and the signature above. The only thing written is the PO counter,
+    // when a number is actually used.
+    const poRecord = (kind, id) => {
+        const k = kind === 'sale' ? 'sale' : 'purchase';
+        const rec = k === 'sale' ? require('./helpers/outboundLoads').getOutboundLoad(id) : require('./helpers/loads').getLoad(id);
+        return { k, rec };
+    };
+    const poAccounts = () => {
+        try { return JSON.parse(require('fs').readFileSync(path.join(__dirname, '..', 'qb-settings', 'bank-accounts.json'), 'utf8')).accounts || []; }
+        catch (e) { return []; }
+    };
+    const poIssuer = (k, rec, accts) => require('./helpers/poFromRecord').buildPoData(k, rec, accts).company;
+
+    app.get('/api/po/next-number', requireAdmin, (req, res) => {
+        try {
+            // From the PO tab: by issuing company (a Bank-tab account id) and date.
+            if (req.query.company_id) {
+                const a = poAccounts().find((x) => x.id === String(req.query.company_id));
+                if (!a) return res.status(404).json({ error: 'company not found' });
+                const pd = require('./helpers/poForm').parseDate(req.query.date);
+                return res.json({ number: require('./helpers/poNumbers').suggest(a.company, pd ? pd.iso : null), company: a.company });
+            }
+            const { k, rec } = poRecord(req.query.kind, String(req.query.id || ''));
+            if (!rec) return res.status(404).json({ error: 'load not found' });
+            const company = poIssuer(k, rec, poAccounts());
+            res.json({ number: require('./helpers/poNumbers').suggest(company, null), company });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // The PO tab beside BOL in the phone app (2026-11-17). Options for its
+    // dropdowns — names and addresses only, never the account numbers the Bank
+    // tab holds.
+    app.get('/api/po/options', requireAdmin, (req, res) => {
+        const accts = poAccounts();
+        const F = require('./helpers/poForm');
+        res.json({
+            companies: accts.map((a) => ({ id: a.id, company: a.company, address: a.address || '' })),
+            deliver: F.deliverOptions(accts), units: F.UNITS, signer: F.DEFAULT_SIGNER,
+        });
+    });
+
+    // Generate from what the tab typed. Saves nothing but the counter. A typed
+    // number wins; a blank one is reserved here, per company and day.
+    app.post('/api/po/generate', requireAdmin, async (req, res) => {
+        try {
+            const F = require('./helpers/poForm');
+            const numbers = require('./helpers/poNumbers');
+            const sig = require('./helpers/signature').signatureDataUrl() || '';
+            const body = req.body || {};
+            let r = F.buildPoFromForm(body, poAccounts(), sig);
+            if (!String(body.number || '').trim() && r.d.company && r.dateIso) {
+                // Everything else must be right before a number is spent on it.
+                const rest = r.problems.filter((p) => p !== 'Enter a PO number.');
+                if (rest.length) return res.status(400).json({ error: rest[0], problems: rest });
+                r = F.buildPoFromForm(Object.assign({}, body, { number: await numbers.reserve(r.d.company, r.dateIso) }), poAccounts(), sig);
+            } else if (!r.problems.length) {
+                await numbers.noteUsed(r.d.company, r.d.number);
+            }
+            if (r.problems.length) return res.status(400).json({ error: r.problems[0], problems: r.problems });
+            const pdf = await require('./helpers/poPdf').generatePoPdf(r.d);
+            res.set('Content-Type', 'application/pdf');
+            res.set('Content-Disposition', `inline; filename="${String(r.d.number).replace(/[^A-Za-z0-9_-]/g, '_')}.pdf"`);
+            res.set('X-PO-Number', r.d.number);
+            res.send(pdf);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    app.post('/api/po/from-record', requireAdmin, async (req, res) => {
+        try {
+            const body = req.body || {};
+            const { k, rec } = poRecord(body.kind, String(body.id || ''));
+            if (!rec) return res.status(404).json({ error: 'load not found' });
+            const accts = poAccounts();
+            const numbers = require('./helpers/poNumbers');
+            const company = poIssuer(k, rec, accts);
+            const typed = String(body.number || '').trim();
+            const number = typed || await numbers.reserve(company, null);
+            if (typed) await numbers.noteUsed(company, typed);
+            const d = require('./helpers/poFromRecord').buildPoData(k, rec, accts, {
+                number, signatureImg: require('./helpers/signature').signatureDataUrl() || '' });
+            if (!d.lines.length) return res.status(400).json({ error: 'This record has no priced items, so there is nothing to put on a PO.' });
+            const pdf = await require('./helpers/poPdf').generatePoPdf(d);
+            res.set('Content-Type', 'application/pdf');
+            res.set('Content-Disposition', `inline; filename="${number}.pdf"`);
+            res.set('X-PO-Number', number);
+            res.send(pdf);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
     // preview=1 (query string) returns the PDF inline without saving a copy
     // or touching pricing memory — used by the "Preview" button so a user
     // can check the layout before committing to a generation. Anything

@@ -178,6 +178,8 @@ module.exports = function (app, ctx) {
             const { addOutboundLoad } = require('./helpers/outboundLoads');
             const record = await addOutboundLoad({
                 date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
+                // Which company SELLS (2026-11-17). Only when sent, so an older client leaves it alone.
+                ...(b.seller_company !== undefined ? { seller_company: b.seller_company } : {}),
                 trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
                 linked_inbound_load_ids: b.linked_inbound_load_ids,
                 description: b.description, items: b.items, weight_unit: b.weight_unit,
@@ -254,6 +256,8 @@ module.exports = function (app, ctx) {
             const { editOutboundLoad } = require('./helpers/outboundLoads');
             const record = await editOutboundLoad(req.params.id, {
                 date: b.date, buyer: b.buyer, buyer_address: b.buyer_address,
+                // Which company SELLS (2026-11-17). Only when sent, so an older client leaves it alone.
+                ...(b.seller_company !== undefined ? { seller_company: b.seller_company } : {}),
                 trucker_name: b.trucker_name, quote_request_id: b.quote_request_id, quote_request_kind: b.quote_request_kind,
                 linked_inbound_load_ids: b.linked_inbound_load_ids,
                 description: b.description, items: b.items, weight_unit: b.weight_unit,
