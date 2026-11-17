@@ -373,6 +373,14 @@ function renderLoads(loads) {
          one wins, the badge renders. */
       .pay-none { background:rgba(148,163,184,.12); color:var(--text-muted); border:1px solid var(--border-subtle); }
       .ld-item-desc-wrap { display:flex; flex-direction:column; gap:3px; min-width:0; }
+      /* Ferrous / non-ferrous chip (2026-11-18, Apsara: "once ferrous/non-ferrous added, alignment is changing").
+         In the one-line desktop row the chip used to sit IN FLOW under the description box, making that cell
+         taller, so every other box in the row was re-centred against it. It now hangs below the box without
+         taking height; .has-metal adds the room it needs under the row instead. The stacked phone layout keeps
+         it in flow (see the override in the narrow block). */
+      .ld-item-desc-wrap { position:relative; }
+      .ld-item-desc-wrap .ld-metal-chip { position:absolute; top:100%; left:0; padding:0 !important; line-height:13px; white-space:nowrap; z-index:0; }
+      .item-row.has-metal { margin-bottom:19px; }
       /* Own positioning context for the description type-ahead dropdown —
          .ld-item-desc-wrap is forced position:static in the phone grid. */
       .ld-desc-ac-wrap { position:relative; min-width:0; }
@@ -519,6 +527,8 @@ function renderLoads(loads) {
           margin-bottom:12px;
         }
         .ld-item-desc-wrap { grid-area:desc; position:static; padding-right:0; }
+        .ld-item-desc-wrap .ld-metal-chip { position:static; padding:2px 0 0 !important; line-height:normal; }
+        .item-row.has-metal { margin-bottom:12px; }
         .ld-item-cap-gross { grid-area:gross; }
         .ld-item-cap-tare { grid-area:tare; }
         .ld-item-net-wrap { grid-area:net; }
@@ -797,29 +807,31 @@ function renderLoads(loads) {
                  - Load description removed; every item row already carries
                    its own. The stored field is untouched, so older loads keep
                    theirs and still print it. -->
-          <div class="ld-grid-2">
-            <div class="field"><label>Date</label><input id="ld_date" placeholder="MM/DD/YYYY" autocomplete="off" style="max-width:170px;"></div>
+          <div style="display:grid; grid-template-columns:1fr; gap:14px;">
+            <!-- Date, and beside it which of her companies is on the other side of this
+                 record (Apsara, 2026-11-17): the BUYER on a purchase, the SELLER on a sale.
+                 A label only: books, stock and payments are unchanged (helpers/loadCompany.js).
+                 Defaults to Edge Trading, what every record has always been. Phone layout (2026-11-18, Apsara): one column,
+                 Date, then the company, then the seller details below. The website keeps its own two-column layout. -->
+            <div>
+              <div class="field"><label>Date</label><input id="ld_date" placeholder="MM/DD/YYYY" autocomplete="off" style="max-width:170px;"></div>
+              <div class="field" id="ld_company_wrap" style="margin-top:10px;">
+                <label id="ld_company_label" for="ld_company">Buyer (our company)</label>
+                <select id="ld_company"><option value="Edge Trading">Edge Trading</option><option value="Edge Metals">Edge Metals</option><option value="AAA Investment">AAA Investment</option></select>
+              </div>
+            </div>
             <div class="field" style="position:relative;">
               <label id="ld_party_label">Seller</label>
               <input id="ld_seller" placeholder="Seller name" autocomplete="off">
               <div id="ld_seller_ac" class="ac-dropdown hidden"></div>
             </div>
           </div>
-          <!-- Which of her companies is on the other side of this record
-               (Apsara, 2026-11-17): the BUYER on a purchase, the SELLER on a
-               sale. A label only: books, stock and payments are unchanged
-               (helpers/loadCompany.js). Defaults to Edge Trading, which is
-               what every record has always been. -->
-          <div class="field" id="ld_company_wrap" style="margin-top:14px; max-width:260px;">
-            <label id="ld_company_label" for="ld_company">Buyer (our company)</label>
-            <select id="ld_company"><option value="Edge Trading">Edge Trading</option><option value="Edge Metals">Edge Metals</option><option value="AAA Investment">AAA Investment</option></select>
-          </div>
-          <div class="ld-grid-2" id="ld_party_row2" style="margin-top:14px;">
+          <div id="ld_party_row2" style="display:grid; grid-template-columns:1fr; gap:14px; margin-top:14px;">
             <div class="field"><label id="ld_party_addr_label">Seller address</label><textarea id="ld_seller_address" placeholder="e.g. 456 Scrap Ave, Dallas, TX" rows="1" style="width:100%; padding:11px 12px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-sm); color:var(--text-strong); outline:none; resize:vertical; font-family:inherit;"></textarea></div>
             <!-- Optional, per Apsara 2026-08-17. Only used server-side to
                  build the WhatsApp chat id for the "Send to seller" button
                  once a PDF exists; never required to save a load. -->
-            <div class="field"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="e.g. 8056944193 (country code auto-added)" autocomplete="off"></div>
+            <div class="field"><label>Seller phone (optional)</label><input id="ld_seller_phone" type="tel" placeholder="type the full number with country code, e.g. 18056944193" autocomplete="off"></div>
           </div>
 
           <div style="margin-top:18px;">

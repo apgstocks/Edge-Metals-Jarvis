@@ -178,6 +178,38 @@ for (const f of ['app/02-cache-catalogue.js', 'app/05-payment-roles.js', 'app/07
     ck(`Android assets match www: ${f}`, fs.existsSync(a) && fs.readFileSync(a, 'utf8') === read('mobile-app/www/' + f));
 }
 
+section('G — Apsara 2026-11-18: an item already answered must not ask again in the next row');
+{
+    // Both rows blur before the first question has been answered (the list is fetched the first time, so on a slow
+    // connection the second row can be typed before the first question even shows). Used to ask twice.
+    const w = await page([['Alternators', ''], ['alternators', ''], ['Starters', '']], { map: {} });
+    const rows = rowsOf(w);
+    const p0 = w.__m.ensureRowMetal(rows[0], false);
+    const p1 = w.__m.ensureRowMetal(rows[1], false);
+    await wait(40);
+    ck('only ONE question is open for the same item typed in two rows', dialogs(w).length === 1, String(dialogs(w).length));
+    dialogs(w)[0].querySelector('[data-metal="ferrous"]').click();
+    await p0; await p1; await wait(20);
+    ck('no second question follows', dialogs(w).length === 0);
+    ck('both rows carry the one answer', hidOf(rows[0]).value === 'ferrous' && hidOf(rows[1]).value === 'ferrous');
+    ck('and the row shows it at once (chip says Ferrous)', /Ferrous/.test(rows[1].querySelector('.ld-metal-chip').textContent));
+    const p2 = w.__m.ensureRowMetal(rows[2], false);
+    await wait(30);
+    ck('a DIFFERENT item is still asked', dialogs(w).length === 1 && /Starters/.test(dialogs(w)[0].textContent));
+    dialogs(w)[0].querySelector('[data-metal="non-ferrous"]').click(); await p2;
+    ck('questions queue: two different new items never show two dialogs at once', true);
+}
+{
+    const w = await page([['Wheels', ''], ['Hubs', '']], { map: {} });
+    const rows = rowsOf(w);
+    const a = w.__m.ensureRowMetal(rows[0], false), b = w.__m.ensureRowMetal(rows[1], false);
+    await wait(40);
+    ck('two different new items: one dialog at a time', dialogs(w).length === 1 && /Wheels/.test(dialogs(w)[0].textContent));
+    dialogs(w)[0].querySelector('[data-metal="ferrous"]').click(); await a; await wait(30);
+    ck('then the next one', dialogs(w).length === 1 && /Hubs/.test(dialogs(w)[0].textContent));
+    dialogs(w)[0].querySelector('[data-metal="non-ferrous"]').click(); await b;
+}
+
 finished = true;
 console.log(`\n  ${pass} passed, ${fail} failed`);
 if (failures.length) { console.log('\n  failed:'); failures.forEach((f) => console.log('    · ' + f)); }

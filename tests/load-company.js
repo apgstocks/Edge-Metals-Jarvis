@@ -143,7 +143,7 @@ const LC = require('../helpers/loadCompany');
         for (const s of sites) {
             const m = fs.readFileSync(path.join(ROOT, s.modal), 'utf8');
             const d = fs.readFileSync(path.join(ROOT, s.mode), 'utf8');
-            ck(`${s.name}: the form offers exactly the three companies, Edge Trading first`, /<select id="ld_company"><option value="Edge Trading">Edge Trading<\/option><option value="Edge Metals">Edge Metals<\/option><option value="AAA Investment">AAA Investment<\/option><\/select>/.test(m));
+            ck(`${s.name}: the form offers exactly the three companies, Edge Trading first`, /<select id="ld_company"[^>]*><option value="Edge Trading">Edge Trading<\/option><option value="Edge Metals">Edge Metals<\/option><option value="AAA Investment">AAA Investment<\/option><\/select>/.test(m));
             ck(`${s.name}: the save sends the pick for purchases and for sales`, /buyer_company: \$\('ld_company'\)/.test(m) && /seller_company: payload\.seller_company/.test(m));
             ck(`${s.name}: the label follows the mode (buyer on a purchase, seller on a sale)`, /sale \? 'Seller \(our company\)' : 'Buyer \(our company\)'/.test(d));
             ck(`${s.name}: opening a load puts the SAVED company back`, /setLoadCompany\(loadModalMode === 'sale' \? load\.seller_company : load\.buyer\)/.test(d));

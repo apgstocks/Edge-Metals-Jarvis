@@ -372,6 +372,11 @@ async function renderItemMaintenance() {
           <div style="font-size:13px; color:var(--text-strong); overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${esc(it.name)}${it.spellings.length > 1 ? ' <span style="color:var(--text-faint); font-size:11px;">(also typed: ' + esc(it.spellings.slice(1).join(', ')) + ')</span>' : ''}</div>
           <div style="font-family:var(--font-mono); font-size:10.5px; color:var(--text-faint);">bought ${it.inbound.loads} load${it.inbound.loads === 1 ? '' : 's'} · ${fmt(it.inbound.weight)} · shipped ${it.outbound.loads}</div>
         </div>
+        <select class="im-metal" data-name="${esc(it.name)}" title="Ferrous or non-ferrous. Sets what the load forms ask and remember for this item; saved loads are not changed." style="flex:none; width:auto; padding:6px 8px; font-size:11px;">
+          <option value=""${it.metal_type ? '' : ' selected'}>Unsorted</option>
+          <option value="ferrous"${it.metal_type === 'ferrous' ? ' selected' : ''}>Ferrous</option>
+          <option value="non-ferrous"${it.metal_type === 'non-ferrous' ? ' selected' : ''}>Non-ferrous</option>
+        </select>
         <button class="btn btn-im-rename" data-name="${esc(it.name)}" style="padding:6px 12px; font-size:10px;">Rename</button>
       </div>`).join('') : '<div style="font-family:var(--font-mono); font-size:11.5px; color:var(--text-faint); text-align:center; padding:10px 0;">No items match.</div>';
     const refreshBar = () => {
@@ -403,6 +408,14 @@ async function renderItemMaintenance() {
         if (await renameItems([...imSelected])) { imSelected.clear(); loadItemTypeRows(); renderItemMaintenance(); }
       } catch (e) { alert(e.message); } finally { refreshBar(); }
     };
+    rows.querySelectorAll('.im-metal').forEach(sel => sel.addEventListener('change', async () => {
+      // Saved the moment it changes. On a failure the list is redrawn from the server so the box never
+      // shows an answer that was not kept.
+      sel.disabled = true;
+      try {
+        await api('/api/item-maintenance/metal', { method: 'PUT', body: JSON.stringify({ name: sel.dataset.name, metal_type: sel.value || null }) });
+      } catch (e) { alert(e.message); renderItemMaintenance(); } finally { sel.disabled = false; }
+    }));
     rows.querySelectorAll('.btn-im-rename').forEach(btn => btn.addEventListener('click', async () => {
       btn.disabled = true;
       try {

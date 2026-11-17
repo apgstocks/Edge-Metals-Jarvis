@@ -283,10 +283,14 @@ section('F — nothing new can write');
     // and it refused; asked, she chose to teach it, propose-then-confirm, with
     // the price and date always asked. tests/yard-outbound-sale-tool.js.
     //
+    // merge_item_names JOINS, DELIBERATELY (2026-11-18). Apsara: "Rotor and Rotors, all this cleaning should be handled by
+    // Scout automatically"; asked how far, she chose "Scout finds, you confirm". Always a confirm card, admin only,
+    // names only, with Undo. tests/scout-item-variants.js.
+    //
     // Anything else arriving in this list is NOT declared and should be
     // argued about before the pin is widened again.
     ck('  and the write list is unchanged',
-       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense', 'record_outbound_sale'].sort().join(','),
+       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense', 'record_outbound_sale', 'merge_item_names'].sort().join(','),
        writes.join(', '));
 }
 

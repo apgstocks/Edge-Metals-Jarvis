@@ -68,6 +68,25 @@ function fill(items) {
     });
 }
 
+// Back to Unsorted: drops the learned answer for this name. Nothing already saved on a load changes.
+async function forget(desc) {
+    const k = keyOf(desc);
+    if (!k) return false;
+    let had = false;
+    await mutateJson(FILE(), {}, (m) => { const o = (m && typeof m === 'object' && !Array.isArray(m)) ? m : {}; had = k in o; delete o[k]; return o; });
+    return had;
+}
+// A rename or merge must not quietly lose her ferrous / non-ferrous answer: the new name takes it when it has none yet
+// and every old name that had one agreed. Different answers are ambiguous, so it is left Unsorted. Used by the Item
+// maintenance route and by Scout's merge, so both behave the same.
+async function carryOnRename(from, to) {
+    if (typeOf(to)) return null;
+    const types = new Set([].concat(from || []).map((n) => typeOf(n)).filter(Boolean));
+    if (types.size !== 1) return null;
+    const t = [...types][0];
+    await remember(to, t);
+    return t;
+}
 async function remember(desc, type) {
     const t = normType(type);
     const k = keyOf(desc);
@@ -85,4 +104,4 @@ async function learnFromItems(items) {
     } catch (e) { console.error('[itemMetal] could not remember item types:', e.message); }
 }
 
-module.exports = { TYPES, FERROUS, NON_FERROUS, normType, keyOf, all, typeOf, fill, remember, learnFromItems };
+module.exports = { TYPES, FERROUS, NON_FERROUS, normType, keyOf, all, typeOf, fill, remember, learnFromItems, forget, carryOnRename };

@@ -58,7 +58,8 @@ function toNum(v) {
 function normalizeSellerPhone(raw) {
     const digits = String(raw || '').replace(/\D/g, '');
     if (!digits) return null;
-    if (digits.length === 10) return `91${digits}`;
+    // 2026-11-18: Apsara — "to whatever i type 9 is getting auto appended". A 10-digit number used to get India's 91
+    // put in front, which broke US sellers. She chose: add nothing, the number is kept exactly as typed (digits only).
     return digits;
 }
 

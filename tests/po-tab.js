@@ -154,6 +154,7 @@ const ACCOUNTS = [
         const twoP = await req('POST', '/api/po/generate', { sid, body: form({ company_id: 'edge-trading-chase', two: true, label_a: 'Clean', label_b: 'Dirty', lines: [{ desc: 'Alu', qty: '2', unit: 'LB', price: '3', price2: '2' }] }) });
         ck('two prices print both totals, and no signature image for Edge Trading', twoP.status === 200 && /Total if Clean/.test(pdfHtml[pdfHtml.length - 1]) && /Total if Dirty/.test(pdfHtml[pdfHtml.length - 1]) && !/<img src="data:image\/png/.test(pdfHtml[pdfHtml.length - 1]));
         ck('staff are refused on every PO route', (await req('GET', '/api/po/options', { sid: staff })).status === 403 && (await req('POST', '/api/po/generate', { sid: staff, body: form({}) })).status === 403 && (await req('GET', '/api/po/next-number?company_id=edge-metals-bofa', { sid: staff })).status === 403);
+        ck('the PDF fills the page, so the dark footer sits on the bottom edge (not hanging above it)', (() => { const h = require('../helpers/poPdf').buildPoHtml(F.buildPoFromForm({ company_id: 'edge-metals-bofa', lines: [] }, ACCOUNTS, '').d); const i = h.indexOf('@page :first{margin:0;}'); return i > h.indexOf('@page :first{margin:0 0 14mm;}') && /min-height:296\.5mm/.test(h.slice(i)); })());
         const left = fs.readdirSync(cfg.DATA_DIR).filter((f) => /po/i.test(f) && !/counters/.test(f));
         ck('nothing but the counter was saved', left.length === 0, left.join(','));
     }

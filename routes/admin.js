@@ -266,6 +266,23 @@ module.exports = function (app, ctx) {
         try { res.json({ items: require('./helpers/itemMaintenance').summary({ q: req.query.q }), history: require('./helpers/itemMaintenance').history() }); }
         catch (e) { res.status(500).json({ error: e.message }); }
     });
+    // Ferrous / non-ferrous against an item NAME (2026-11-18, Apsara: "keep this option of
+    // ferrous / non-ferrous against each item in item maintenance"). It sets the learned answer
+    // the load forms use (helpers/itemMetal.js); it does NOT rewrite lines already saved on
+    // loads, so no figure and no issued ticket changes. metal_type null = back to Unsorted.
+    app.put('/api/item-maintenance/metal', requireAdmin, async (req, res) => {
+        try {
+            const M = require('./helpers/itemMetal');
+            const name = String((req.body || {}).name || '').trim();
+            if (!name) return res.status(400).json({ error: 'Which item?' });
+            const raw = (req.body || {}).metal_type;
+            if (raw === null || raw === '' || raw === undefined) { await M.forget(name); return res.json({ name, metal_type: null }); }
+            const t = M.normType(raw);
+            if (!t) return res.status(400).json({ error: 'metal_type must be ferrous, non-ferrous, or empty for Unsorted' });
+            await M.remember(name, t);
+            res.json({ name, metal_type: t });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
     app.post('/api/item-maintenance/preview', requireAdmin, (req, res) => {
         try { res.json(require('./helpers/itemMaintenance').preview(req.body.from, req.body.to)); }
         catch (e) { res.status(400).json({ error: e.message }); }
@@ -273,7 +290,7 @@ module.exports = function (app, ctx) {
     app.post('/api/item-maintenance/apply', requireAdmin, async (req, res) => {
         try {
             const r = await require('./helpers/itemMaintenance').apply(req.body.from, req.body.to, { by: actorOf(req) });
-            // The Drive 'Inventory-Overall' sheet and the monthly loads workbooks are rebuilt from the loads on every change; a rename changes them too, so rebuild (fire-and-forget, never fails the rename).
+            try { await require('./helpers/itemMetal').carryOnRename(req.body.from, req.body.to); } catch (_) { /* the rename is done; the type is a convenience */ }
             try { const ss = require('./helpers/sheetSync'); ss.scheduleSync(r.months || []); } catch (_) { /* Drive is best-effort */ }
             res.json(r);
         }

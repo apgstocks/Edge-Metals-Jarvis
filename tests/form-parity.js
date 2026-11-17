@@ -66,7 +66,7 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
     ck(`${label}: load-level description box removed`, !/>Load description</.test(src));
     ck(`${label}: still sends Edge Trading as the buyer`, /buyer: BUYER_FIXED_NAME/.test(src));
     ck(`${label}: an old load's description is preserved on save`, /editingLoadDescription/.test(src));
-    ck(`${label}: Date and Seller share the first row`, /Date<\/label>[\s\S]{0,260}?ld_party_label/.test(src));
+    ck(`${label}: Date and Seller share the first row`, /Date<\/label>[\s\S]{0,900}?ld_party_label/.test(src));
     ck(`${label}: address and phone share the second row`, /ld_party_row2[\s\S]{0,800}?ld_seller_phone/.test(src));
     ck(`${label}: that row collapses on a sale, where phone is hidden`, /gridTemplateColumns = sale/.test(src));
     ck(`${label}: totals refresh from recomputeRowTotals itself`,

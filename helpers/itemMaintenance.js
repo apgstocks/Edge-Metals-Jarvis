@@ -68,7 +68,8 @@ function summary({ q } = {}) {
     }
     return [...groups.values()].map((g) => {
         const sp = [...g.spellings.entries()].sort((a, b) => b[1] - a[1]).map((e) => e[0]);
-        return { name: sp[0], spellings: sp, inbound: g.inbound, outbound: g.outbound, drafts: g.drafts };
+        // The learned ferrous / non-ferrous answer for this name (2026-11-18), or null = Unsorted.
+        return { name: sp[0], spellings: sp, metal_type: require('./itemMetal').typeOf(sp[0]), inbound: g.inbound, outbound: g.outbound, drafts: g.drafts };
     }).sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
 }
 
@@ -188,4 +189,41 @@ function history() {
         .map((e) => ({ id: e.id, at: e.at, from: Array.isArray(e.from) ? e.from.join(' + ') : e.from, to: e.to, lines: e.changes.length, undone: !!e.undone }));
 }
 
-module.exports = { summary, preview, apply, undo, history, keyOf };
+// ── LIKELY VARIANTS (2026-11-18) ─────────────────────────────────────────────
+// Apsara: "Rotor and Rotors, all this cleaning should be handled by Scout automatically", and, asked how far,
+// "Scout finds, you confirm". This only FINDS. It writes nothing; the merge is apply() above, run when she taps Yes.
+// Twins only: names that differ in case, spacing, hyphens/punctuation, or a plural "s"/"es"/"ies". Anything with a
+// different number or a different word is NOT a twin (Aluminium 6061 and 6063 are different metals).
+const singular = (w) => {
+    if (w.length > 4 && /ies$/.test(w)) return w.slice(0, -3) + 'y';
+    if (w.length > 4 && /(ch|sh|x|z|ss)es$/.test(w)) return w.slice(0, -2);
+    if (w.length > 3 && /s$/.test(w) && !/(ss|us|is)$/.test(w)) return w.slice(0, -1);
+    return w;
+};
+const twinKey = (name) => keyOf(name).replace(/[^a-z0-9 ]+/g, ' ').split(/\s+/).filter(Boolean).map(singular).join(' ');
+function variants() {
+    const metal = require('./itemMetal');
+    const groups = new Map();
+    for (const it of summary({})) {
+        const k = twinKey(it.name);
+        if (!k) continue;
+        if (!groups.has(k)) groups.set(k, []);
+        groups.get(k).push(it);
+    }
+    const out = [];
+    for (const members of groups.values()) {
+        if (members.length < 2) continue;
+        const lines = (m) => m.inbound.lines + m.outbound.lines + m.drafts.lines;
+        const sorted = members.slice().sort((a, b) => lines(b) - lines(a) || a.name.localeCompare(b.name));
+        const types = new Set(sorted.map((m) => metal.typeOf(m.name)).filter(Boolean));
+        out.push({
+            suggested: sorted[0].name,                      // the spelling already used most
+            names: sorted.map((m) => ({ name: m.name, lines: lines(m), bought_loads: m.inbound.loads, shipped_loads: m.outbound.loads, metal_type: metal.typeOf(m.name) })),
+            // Two answers on file (one ferrous, one non-ferrous) means they may NOT be the same thing: say so, never merge it quietly.
+            conflict: types.size > 1,
+        });
+    }
+    return out.sort((a, b) => a.suggested.toLowerCase().localeCompare(b.suggested.toLowerCase()));
+}
+
+module.exports = { summary, preview, apply, undo, history, keyOf, variants, twinKey };

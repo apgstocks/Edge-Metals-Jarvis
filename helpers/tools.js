@@ -1059,6 +1059,63 @@ const TOOLS = {
         },
     },
 
+    // ── ITEM NAME CLEAN-UP (2026-11-18) ──────────────────────────────────────
+    // Apsara: "Rotor and Rotors, all this cleaning should be handled by Scout automatically" and, asked how far,
+    // "Scout finds, you confirm". So: a READ tool that finds likely twins (case, spacing, hyphens, a plural s) and a
+    // WRITE tool that is only ever a confirm card. The merge itself is Item maintenance's apply(), journalled with
+    // Undo; nothing here rewrites a record by itself. Edge Yard only (those files are all it reads).
+    find_item_variants: {
+        kind: 'read',
+        description: 'Edge Yard item names that look like the same item spelled differently (Rotor / Rotors, Al-combo / Al combo): same words apart from case, spacing, hyphens or a plural s. Use when asked to clean up, tidy or merge item names, or when two item names look like one. It only LISTS; to merge, propose merge_item_names for the group the person agrees with. A group marked conflict has one name filed as ferrous and another as non-ferrous, so they may not be the same item: say so, never suggest merging it.',
+        params: {},
+        run: async () => {
+            const groups = require('./itemMaintenance').variants();
+            return { total: groups.length, groups: groups.slice(0, 20), showing: Math.min(20, groups.length) };
+        },
+    },
+
+    merge_item_names: {
+        kind: 'write',
+        description: 'Merge item spellings that are the same item into ONE name, across Edge Yard loads bought, loads sold and open drafts (names only: no weight, price or status changes; Undo is in Settings, Item maintenance). Only for names find_item_variants listed or the person named. Always a confirm card.',
+        params: {
+            from: { type: 'array', required: true, describe: 'the spellings to merge, exactly as listed, e.g. ["Rotor","Rotors"]' },
+            to: { type: 'string', required: true, describe: 'the one name they should all become, normally the spelling used most' },
+        },
+        propose: async (p, ctx = {}) => {
+            const IM = require('./itemMaintenance');
+            if (ctx.role && ctx.role !== 'admin') throw new Error('Merging item names rewrites saved loads, so only the manager can confirm it. Ask the manager, or use Settings, Item maintenance.');
+            const names = (Array.isArray(p.from) ? p.from : [p.from]).map(str).filter(Boolean);
+            const to = str(p.to);
+            if (!names.length || !to) throw new Error('which item names should be merged, and into what?');
+            // Untrusted input: every name must be an item that exists today, matched exactly as the screen lists it.
+            const have = IM.summary({});
+            const known = new Map(have.flatMap((it) => it.spellings.map((sp) => [IM.keyOf(sp), sp])));
+            const missing = names.filter((n) => !known.has(IM.keyOf(n)));
+            if (missing.length) throw new Error(`I cannot find an item called ${missing.map((n) => `"${n}"`).join(', ')} on the yard's loads. Use find_item_variants to see the exact names.`);
+            const from = [...new Set(names.map((n) => known.get(IM.keyOf(n))))];
+            const pv = IM.preview(from, to);
+            if (!pv.total_lines) throw new Error('Those names are already exactly that, so there is nothing to merge.');
+            const metal = require('./itemMetal');
+            const types = new Set(from.concat(to).map((n) => metal.typeOf(n)).filter(Boolean));
+            const warnings = [];
+            if (types.size > 1) warnings.push('These names are filed under different metal types (ferrous and non-ferrous). Check they really are the same item before confirming.');
+            const where = Object.values(pv.stores).filter((x) => x.lines).map((x) => `${x.lines} line${x.lines === 1 ? '' : 's'} in ${x.loads} ${x.label}`).join(', ');
+            return {
+                summary: `Rename ${from.map((n) => `"${n}"`).join(' and ')} to "${to}" on ${pv.total_lines} saved line${pv.total_lines === 1 ? '' : 's'}.`,
+                details: [['From', from.join(', ')], ['To', to], ['Changes', where || 'none'], ['Not changed', 'weights, prices, status, issued PDFs'], ['Undo', 'Settings, Item maintenance, Recent renames']],
+                warnings,
+                run: async (c = {}) => {
+                    // The route is admin-only and this rewrites saved loads, so the role is re-checked at the moment of the write.
+                    if (c.role !== 'admin') throw new Error('Only the manager can merge item names.');
+                    const r = await IM.apply(from, to, { by: 'scout' });
+                    try { await metal.carryOnRename(from, to); } catch (e) { /* the type is a convenience */ }
+                    try { require('./sheetSync').scheduleSync(r.months || []); } catch (e) { /* Drive is best-effort */ }
+                    return r;
+                },
+            };
+        },
+    },
+
     add_expense: {
         kind: 'write',
         description: 'Record a yard expense. Choosing Cash also draws it out of the petty cash box.',

@@ -806,6 +806,7 @@ function paintMetalChip(row) {
   const input = row.querySelector('.ld-item-desc-input');
   if (!hid || !chip || !input) return;
   chip.style.display = input.value.trim() ? '' : 'none';
+  row.classList.toggle('has-metal', !!input.value.trim());
   chip.textContent = hid.value ? (METAL_LABEL[hid.value] || hid.value) + ' · change' : 'Ferrous or non-ferrous? Tap to choose';
   chip.style.color = hid.value ? 'var(--text-muted)' : 'var(--danger, #c0392b)';
 }
@@ -818,27 +819,47 @@ function setRowMetal(row, type) {
   paintMetalChip(row);
   syncItemsFromDom();
 }
-// One question at a time per row. `force` re-asks (the chip), otherwise a row that already has an answer for its
-// current name, or a name the server has learned, is settled without a dialog.
+// One question at a time, across the WHOLE form (Apsara, 2026-11-18: having answered an item, the same item in the next
+// row must not ask again). Before this each row asked for itself, so on a slow connection (the learned list is fetched
+// the first time) she could type the same item into row 2 before row 1's question had even appeared, and both asked.
+// Now the questions queue, each one re-checks the answers given while it waited, and an answer is applied to every
+// other row carrying the same item at once.
+let metalChain = Promise.resolve();
+function applyMetalToSameItem(k, type) {
+  document.querySelectorAll('#ld_items .item-row').forEach((r) => {
+    const i = r.querySelector('.ld-item-desc-input'), h = r.querySelector('.ld-item-metal');
+    if (i && h && !h.value && metalKey(i.value) === k) setRowMetal(r, type);
+  });
+}
+// `force` re-asks (the chip), otherwise a row that already has an answer for its current name, or a name the server
+// has learned or she has just given, is settled without a dialog.
 function ensureRowMetal(row, force) {
   if (row._metalAsk) return row._metalAsk;
   const run = (async () => {
     const input = row.querySelector('.ld-item-desc-input');
     const hid = row.querySelector('.ld-item-metal');
     if (!input || !hid || !row.isConnected) return;
-    const desc = input.value.trim();
-    const k = metalKey(desc);
-    if (!k) { hid.value = ''; hid.dataset.for = ''; paintMetalChip(row); return; }
-    if (!force && hid.value && hid.dataset.for === k) { paintMetalChip(row); return; }
-    if (!force) {
-      if (!itemMetalMap) await loadItemMetalMap();
-      const known = itemMetalMap[k];
-      if (known) { setRowMetal(row, known); return; }
-    }
-    const pick = await askMetalType(desc);
-    itemMetalMap = itemMetalMap || {};
-    itemMetalMap[k] = pick;
-    setRowMetal(row, pick);
+    if (!String(input.value).trim()) { hid.value = ''; hid.dataset.for = ''; paintMetalChip(row); return; }
+    const prev = metalChain;
+    let release; metalChain = new Promise((r) => { release = r; });
+    try {
+      await prev;
+      if (!row.isConnected) return;
+      const desc = input.value.trim();                    // read AFTER waiting: she may have kept typing
+      const k = metalKey(desc);
+      if (!k) { hid.value = ''; hid.dataset.for = ''; paintMetalChip(row); return; }
+      if (!force && hid.value && hid.dataset.for === k) { paintMetalChip(row); return; }
+      if (!force) {
+        if (!itemMetalMap) await loadItemMetalMap();
+        const known = itemMetalMap[k];
+        if (known) { setRowMetal(row, known); return; }
+      }
+      const pick = await askMetalType(desc);
+      itemMetalMap = itemMetalMap || {};
+      itemMetalMap[k] = pick;
+      setRowMetal(row, pick);
+      applyMetalToSameItem(k, pick);
+    } finally { release(); }
   })();
   row._metalAsk = run;
   run.then(() => { row._metalAsk = null; }, () => { row._metalAsk = null; });
