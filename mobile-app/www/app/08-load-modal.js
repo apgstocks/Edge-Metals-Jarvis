@@ -387,7 +387,12 @@ function loadCardHtml(l) {
       </div>
       <div style="margin-top:10px; display:flex; gap:8px; border-top:1px solid var(--border-subtle); padding-top:10px;">
         <button class="btn btn-edit-load" data-id="${esc(l.id)}" style="font-size:11px; padding:5px 10px;">Edit</button>
-        <button class="btn btn-print-po" data-id="${esc(l.id)}" data-kind="${esc(l._kind || 'purchase')}" title="Purchase Order PDF made from this record. Nothing is saved." style="font-size:11px; padding:5px 10px;">Print PO</button>
+        <!-- Print PO button REMOVED 2026-11-19 per Apsara ("remove print po
+             option in loads"; asked where, she chose the manual, the website
+             and the phone app). Loads and sales only: the PO tab in Docs is
+             untouched. printPoFor() and POST /api/po/from-record are left in
+             place (nothing reaches them now) so putting the button back is
+             one line; removing a route is a breaking API change. -->
         <!-- Renumber button REMOVED 2026-08-17 per Apsara ("remove the
              renumber button in app for both staff and admin access",
              confirmed "remove it everywhere, no exceptions"). Earlier

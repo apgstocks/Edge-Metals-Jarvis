@@ -1,0 +1,102 @@
+// ── tests/trial-vm.js — the trial VM's commands (trial-up, trial-down, trial-config, trial-ship guard) ──
+// Apsara, 2026-11-19: a different VM for trials, set up once with the details she provides. The commands are
+// bash; this runs them for real against a temp "VM" (TRIALS_DIR, ENV_FILE) with pm2, Caddy and npm switched off.
+const fs = require('fs'), os = require('os'), path = require('path'), http = require('http');
+const { spawnSync } = require('child_process');
+let pass = 0, fail = 0; const ck = (n, c, x) => { if (c) { pass++; console.log('  PASS  ' + n); } else { fail++; console.log('  FAIL  ' + n); if (x) console.log('        ' + String(x).slice(0, 400)); } };
+const section = (t) => console.log('\n=== ' + t + ' ===');
+const ROOT = path.join(__dirname, '..');
+const V = (f) => path.join(ROOT, 'scripts/trial-vm', f);
+const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-trialvm-'));
+const TRIALS = path.join(tmp, 'srv'), ARCH = path.join(tmp, 'arch'), ENVF = path.join(tmp, 'trials.env');
+fs.mkdirSync(TRIALS); fs.writeFileSync(ENVF, 'TRIAL_DOMAIN=trials.example.com\nTRIAL_GEMINI_KEY=trial-only-key-123\nTRIAL_MEM_MB=450\n');
+const E = { ...process.env, TRIALS_DIR: TRIALS, ENV_FILE: ENVF, ARCHIVE_DIR: ARCH, SKIP_PM2: '1', SKIP_CADDY: '1', SKIP_NPM: '1' };
+const sh = (script, args, env) => spawnSync('bash', [script, ...args], { encoding: 'utf8', env: { ...E, ...(env || {}) }, timeout: 120000 });
+const mk = (slug, name) => {
+    const out = path.join(tmp, 'build', slug);
+    const r = spawnSync('node', [path.join(ROOT, 'scripts/make-trial.js'), '--name', name, '--slug', slug, '--out', out, '--link-modules', '--port', '39620'], { encoding: 'utf8', timeout: 120000 });
+    if (r.status !== 0) throw new Error(r.stdout + r.stderr);
+    const tgz = path.join(tmp, slug + '.tgz');
+    spawnSync('tar', ['czf', tgz, '-C', path.join(tmp, 'build'), slug]);
+    return tgz;
+};
+const envOf = (slug) => fs.readFileSync(path.join(TRIALS, slug, '.env'), 'utf8');
+
+(async () => {
+    section('A — trial-up');
+    const a = mk('acme', 'Acme Scrap');
+    const up = sh(V('trial-up.sh'), ['acme', a]);
+    ck('it installs and prints the address and logins', up.status === 0 && /STARTED acme/.test(up.stdout) && /https:\/\/acme\.trials\.example\.com/.test(up.stdout) && /ADMIN = /.test(up.stdout), up.stdout + up.stderr);
+    ck('demo data was seeded', fs.existsSync(path.join(TRIALS, 'acme/data/loads.json')));
+    ck('the VM\'s trial-only Gemini key was put in the trial\'s .env', /^GEMINI_API_KEY=trial-only-key-123$/m.test(envOf('acme')));
+    ck('DATA_DIR points inside the trial folder', envOf('acme').includes(`DATA_DIR=${path.join(TRIALS, 'acme')}/data`));
+    ck('.env is private (600)', (fs.statSync(path.join(TRIALS, 'acme/.env')).mode & 0o777) === 0o600);
+    const b = mk('beta', 'Beta Metals');
+    sh(V('trial-up.sh'), ['beta', b]);
+    const pa = envOf('acme').match(/API_PORT=(\d+)/)[1], pb = envOf('beta').match(/API_PORT=(\d+)/)[1];
+    ck('two trials built on the same port get DIFFERENT ports on the VM', pa !== pb, pa + ' ' + pb);
+    ck('a bad slug is refused', sh(V('trial-up.sh'), ['Bad Slug!', a]).status === 1);
+    ck('a missing tarball is refused', sh(V('trial-up.sh'), ['gamma', path.join(tmp, 'nope.tgz')]).status === 1);
+    // a tarball carrying the full Edge Metals app must be refused outright
+    const evil = path.join(tmp, 'build/evil'); fs.mkdirSync(evil, { recursive: true }); fs.writeFileSync(path.join(evil, 'trial-server.js'), '//'); fs.writeFileSync(path.join(evil, 'index.js'), '//');
+    spawnSync('tar', ['czf', path.join(tmp, 'evil.tgz'), '-C', path.join(tmp, 'build'), 'evil']);
+    const ev = sh(V('trial-up.sh'), ['evil', path.join(tmp, 'evil.tgz')]);
+    ck('a tarball that carries the Edge Metals app (index.js) is refused, and nothing is installed', ev.status !== 0 && /refusing/.test(ev.stderr + ev.stdout) && !fs.existsSync(path.join(TRIALS, 'evil')));
+
+    section('B — updating keeps the customer\'s data');
+    const loadsFile = path.join(TRIALS, 'acme/data/loads.json');
+    const L = JSON.parse(fs.readFileSync(loadsFile, 'utf8')); L.push({ id: 'ACME_99', date: '2026-11-19', seller: 'Customer typed this', items: [] }); fs.writeFileSync(loadsFile, JSON.stringify(L));
+    const pwBefore = envOf('acme').match(/ADMIN_PASSWORD=(.+)/)[1];
+    fs.appendFileSync(ENVF, ''); fs.writeFileSync(ENVF, 'TRIAL_DOMAIN=trials.example.com\nTRIAL_GEMINI_KEY=rotated-key-456\nTRIAL_MEM_MB=300\n');
+    const up2 = sh(V('trial-up.sh'), ['acme', mk2()]);
+    function mk2() { const r = path.join(tmp, 'build2'); fs.mkdirSync(r, { recursive: true }); const o = path.join(r, 'acme'); const rr = spawnSync('node', [path.join(ROOT, 'scripts/make-trial.js'), '--name', 'Acme Scrap', '--slug', 'acme', '--out', o, '--link-modules'], { encoding: 'utf8' }); const t = path.join(tmp, 'acme2.tgz'); spawnSync('tar', ['czf', t, '-C', r, 'acme']); return t; }
+    ck('running trial-up again says UPDATED', /UPDATED acme/.test(up2.stdout), up2.stdout + up2.stderr);
+    ck('the customer\'s own data is still there (not re-seeded, not wiped)', fs.readFileSync(loadsFile, 'utf8').includes('Customer typed this'));
+    ck('their passwords did not change', envOf('acme').match(/ADMIN_PASSWORD=(.+)/)[1] === pwBefore);
+    ck('a rotated Gemini key reaches the existing trial', /^GEMINI_API_KEY=rotated-key-456$/m.test(envOf('acme')));
+    fs.writeFileSync(ENVF, 'TRIAL_DOMAIN=trials.example.com\nTRIAL_GEMINI_KEY=trial-only-key-123\nTRIAL_MEM_MB=450\n');
+
+    section('C — the copy it installed really runs');
+    {
+        const { spawn } = require('child_process');
+        const port = Number(envOf('acme').match(/API_PORT=(\d+)/)[1]);
+        const srv = spawn('node', ['trial-server.js'], { cwd: path.join(TRIALS, 'acme'), stdio: 'ignore' });
+        const get = () => new Promise((res) => { http.get({ host: '127.0.0.1', port, path: '/api/health' }, (x) => { x.resume(); res(x.statusCode); }).on('error', () => res(0)); });
+        let code = 0; for (let i = 0; i < 60 && !code; i++) { code = await get(); if (!code) await new Promise((r) => setTimeout(r, 1000)); }
+        srv.kill();
+        ck('the installed trial answers on its own port', code > 0, code);
+    }
+
+    section('D — trial-down');
+    const dn = sh(V('trial-down.sh'), ['beta']);
+    ck('it switches a trial off and keeps folder and data', dn.status === 0 && /SWITCHED OFF beta/.test(dn.stdout) && fs.existsSync(path.join(TRIALS, 'beta/data')), dn.stdout + dn.stderr);
+    ck('its data was archived first', fs.readdirSync(ARCH).some((f) => /^beta-.*\.tgz$/.test(f)));
+    const er = sh(V('trial-down.sh'), ['beta', '--erase']);
+    ck('--erase removes the folder, and the archive remains', er.status === 0 && !fs.existsSync(path.join(TRIALS, 'beta')) && fs.readdirSync(ARCH).some((f) => /^beta-.*\.tgz$/.test(f)));
+    ck('another trial is untouched by it', fs.existsSync(path.join(TRIALS, 'acme/data/loads.json')));
+    ck('an unknown trial is refused', sh(V('trial-down.sh'), ['nosuch']).status === 1);
+
+    section('E — trial-config (the one-time answers, changeable later)');
+    const show = sh(V('trial-config.sh'), []);
+    ck('it shows the settings and hides the key', /TRIAL_DOMAIN=trials\.example\.com/.test(show.stdout) && /set, hidden/.test(show.stdout) && !/trial-only-key-123/.test(show.stdout), show.stdout);
+    ck('it changes the memory cap', sh(V('trial-config.sh'), ['set', 'TRIAL_MEM_MB', '600']).status === 0 && /TRIAL_MEM_MB=600/.test(fs.readFileSync(ENVF, 'utf8')));
+    ck('it refuses a non-number memory cap', sh(V('trial-config.sh'), ['set', 'TRIAL_MEM_MB', 'lots']).status === 1);
+    ck('it refuses something that is not a domain', sh(V('trial-config.sh'), ['set', 'TRIAL_DOMAIN', 'not a domain']).status === 1);
+    ck('it refuses a setting it does not know', sh(V('trial-config.sh'), ['set', 'ADMIN_PASSWORD', 'x']).status === 1);
+
+    section('F — setup and ship guards');
+    const setup = fs.readFileSync(V('setup.sh'), 'utf8');
+    ck('setup asks for domain, Gemini key, email and memory cap, and confirms before installing', ['TRIAL_DOMAIN', 'GEMINI_KEY', 'CERT_EMAIL', 'TRIAL_MEM_MB'].every((k) => new RegExp('ask ' + k).test(setup)) && /Continue\? \[Y\/n\]/.test(setup));
+    ck('the key is read hidden (read -s), not echoed', /read -r -s/.test(setup));
+    ck('the domain is validated before anything is installed', setup.indexOf('does not look like a domain') > 0 && setup.indexOf('does not look like a domain') < setup.indexOf('apt-get update'));
+    ck('answers are kept in /etc/trials.env, readable only by root and the trials user (trial-up runs as that user)', /chown root:trials \/etc\/trials\.env/.test(setup) && /chmod 640 \/etc\/trials\.env/.test(setup));
+    ck('trials listen behind Caddy only; the firewall opens SSH, 80 and 443', /ufw allow 80,443/.test(setup) && /127\.0\.0\.1/.test(fs.readFileSync(V('trial-up.sh'), 'utf8')));
+    ck('the Edge Metals source is never put on the VM (only finished trial folders)', !/git clone|github/i.test(setup));
+    const nr = spawnSync('bash', [V('setup.sh')], { encoding: 'utf8', input: '' });
+    ck('setup refuses to run as a normal user', nr.status !== 0 && /run as root|sudo/.test(nr.stdout + nr.stderr) || process.getuid() === 0);
+    const ship = fs.readFileSync(path.join(ROOT, 'scripts/trial-ship.sh'), 'utf8');
+    ck('trial-ship builds with the leak scan first and stops if it fails (set -e, make-trial before scp)', /set -euo pipefail/.test(ship) && ship.indexOf('make-trial.js') < ship.indexOf('scp '));
+    ck('trial-ship refuses to run on the VM', /this looks like the trial VM/.test(ship));
+    try { fs.rmSync(tmp, { recursive: true, force: true }); } catch (e) { /* best effort */ }
+    console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
+})().catch((e) => { console.error(e); process.exit(1); });

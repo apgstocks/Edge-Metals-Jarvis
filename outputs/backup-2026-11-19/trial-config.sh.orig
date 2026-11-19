@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+# trial-config — show or change the one-time setup answers (domain, Gemini key, email, memory cap). Run with sudo.
+#   sudo trial-config                       show them (the key is hidden)
+#   sudo trial-config set <NAME> <value>    NAME is TRIAL_DOMAIN, TRIAL_GEMINI_KEY, CERT_EMAIL or TRIAL_MEM_MB
+# A changed Gemini key / memory cap reaches an EXISTING trial the next time you run trial-up for it (new trials get it at once).
+set -euo pipefail
+F="${ENV_FILE:-/etc/trials.env}"; [ -f "$F" ] || { echo "$F not found: run setup.sh first"; exit 1; }
+if [ "${1:-}" = "set" ]; then
+  K="${2:-}"; V="${3:-}"
+  case "$K" in TRIAL_DOMAIN|TRIAL_GEMINI_KEY|CERT_EMAIL|TRIAL_MEM_MB) ;; *) echo "unknown setting $K"; exit 1;; esac
+  [ "$K" = TRIAL_MEM_MB ] && ! [[ "$V" =~ ^[0-9]+$ ]] && { echo "memory must be a number of MB"; exit 1; }
+  [ "$K" = TRIAL_DOMAIN ] && ! [[ "$V" =~ ^([a-z0-9-]+\.)+[a-z]{2,}$ ]] && { echo "not a domain name"; exit 1; }
+  grep -q "^$K=" "$F" && sed -i "s#^$K=.*#$K=$V#" "$F" || echo "$K=$V" >> "$F"
+  echo "saved $K"
+  if [ "$K" = TRIAL_DOMAIN ]; then echo "note: trials already running keep their old address until you run trial-up for each one"; fi
+else
+  sed -E 's/^(TRIAL_GEMINI_KEY)=(.+)$/\1=(set, hidden)/' "$F"
+fi

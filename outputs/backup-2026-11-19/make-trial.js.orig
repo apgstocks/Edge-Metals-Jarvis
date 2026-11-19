@@ -1,0 +1,226 @@
+#!/usr/bin/env node
+// ── scripts/make-trial.js — a plug-and-play TRIAL copy of the yard app ──────
+//
+// Apsara, 2026-11-18: "what if i want to demo it to other customers as a trial ... can you create a plug and play
+// version". Answers she gave: yard app only (no Gmail / WhatsApp / QuickBooks / Drive); one hosted copy per
+// customer; branding applied "in the copy only" so the live Edge Metals code is never touched.
+//
+// WHAT THIS DOES — it only ever READS this repo and WRITES a new folder:
+//   1. copies an ALLOWLIST of files (never data/, qb-settings/, tests/, builds/, node_modules/, anything with a token)
+//   2. rewrites Edge's names, emails, phone numbers and address to the customer's, in text AND in file names
+//   3. writes a fresh .env with new random passwords, trial-server.js (API only: no WhatsApp, no scheduler)
+//   4. SCANS the result for anything of Edge's and exits non-zero if it finds some, so a leak cannot ship quietly
+//
+// USAGE  node scripts/make-trial.js --name "Acme Scrap" --slug acme [--out ../trials/acme] [--port 3101]
+//             [--email owner@acme.example] [--phone "(555) 010-0100"] [--link-modules]
+// then   cd ../trials/acme && npm install && node trial-seed.js && node trial-server.js
+//
+// KNOWN LIMITS (said plainly): comments are rewritten, not removed, so the wording of Edge's own notes stays in the
+// copy with the names swapped out; the phone app's JavaScript is readable by anyone holding the APK.
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+
+const ROOT = path.join(__dirname, '..');
+const arg = (k, d) => { const i = process.argv.indexOf('--' + k); return i > -1 && process.argv[i + 1] && !process.argv[i + 1].startsWith('--') ? process.argv[i + 1] : d; };
+const flag = (k) => process.argv.includes('--' + k);
+
+// ── what is copied (an allowlist: a new file is NOT included until someone adds it here) ──
+const INCLUDE = ['api.js', 'config.js', 'package.json', 'package-lock.json', 'helpers', 'routes', 'dashboard', 'workflow', 'seeds', 'assets', 'alerts.js', 'scheduler.js', 'mobile-app'];
+// Even inside an included folder these never come along.
+const SKIP = [/(^|\/)node_modules(\/|$)/, /(^|\/)\.git(\/|$)/, /(^|\/)data(\/|$)/, /(^|\/)qb-settings(\/|$)/, /(^|\/)tests?(\/|$)/, /(^|\/)builds?(\/|$)/,
+    /(^|\/)outputs?(\/|$)/, /(^|\/)_to_delete(\/|$)/, /mobile-app\/ios(\/|$)/, /android\/(\.gradle(\/|$)|build(\/|$)|app\/build(\/|$)|local\.properties$)/, /\.apk$/, /\.keystore$|\.jks$/,
+    /(^|\/)\.env/, /credentials|token|service-?account|gdrive-sa|keystore|\.jks|\.pem|\.p12|google-services|secret/i, /\.(log|lock)$/, /mutate-restore/, /(^|\/)\.DS_Store$/];
+const TEXT = /\.(js|html|json|css|md|txt|webmanifest|xml|gradle|properties|svg|sh|yml|yaml|java|kt|kts|pro)$/i;
+
+function brandOf(name) {
+    const B = name == null ? '' : String(name).trim();
+    if (!B) throw new Error('--name is required, e.g. --name "Acme Scrap"');
+    return B;
+}
+
+// ── the rewrite, ordered: longest and most specific first ──
+function buildRules({ B, slug, email, phone }) {
+    const dom = `${slug}.example`;
+    const C = B.replace(/[^A-Za-z0-9]/g, '');                 // "Acme Scrap" -> "AcmeScrap"
+    const U = slug.replace(/-/g, '_');
+    // keep the original's capital style: ALL CAPS stays caps, all lower stays lower, anything else takes the built form
+    const keep = (m, built) => (m === m.toUpperCase() ? built.toUpperCase() : m === m.toLowerCase() ? built.toLowerCase() : built);
+    const word = { yard: 'Yard', trading: 'Trading', metal: 'Metals', metals: 'Metals' };
+    return [
+        // private contact details
+        { re: /apg0596@gmail\.com/gi, to: `owner@${dom}` },
+        { re: /export@zimexglt\.com/gi, to: 'export@carrier.example' },
+        { re: /\bapsara@edgemetals\.com/gi, to: email },
+        { re: /\bbose@[a-z0-9.-]+/gi, to: `ops@${dom}` },
+        { re: /@edgemetals\.com/gi, to: `@${dom}` },
+        { re: /edgemetals\.com/gi, to: dom },
+        { re: /radmetals\.[a-z]+/gi, to: dom },
+        { re: /\+?1?[ -]?\(?310\)?[ -]?938[ -]?2525/g, to: phone },
+        { re: /\b938[ -]?2525\b/g, to: '010-0100' },
+        { re: /\b1?[ -]?8056944193\b|\b1 80569 44193\b|\b918056944193\b/g, to: '15550100100' },
+        { re: /\b2098848345\b|\b3010354116\b|\b3010355035\b/g, to: '5550100101' },
+        { re: /14750 Devonshire Ln/gi, to: '100 Main Street' },
+        { re: /Frisco, TX 75035/gi, to: 'Anytown, TX 75000' },
+        { re: /\bFrisco\b/gi, to: 'Anytown' },
+        // the three companies, each kept DISTINCT (the code tells them apart), in every spelling: "Edge Yard", EdgeYard, edge_yard, EDGE-METALS
+        { re: /edge([ _-]?)(yard|trading|metals?)/gi, fn: (m, sep, w) => {
+            const W = word[w.toLowerCase()];
+            const built = sep === ' ' ? `${B} ${W}` : sep === '_' ? `${U}_${W.toLowerCase()}` : sep === '-' ? `${slug}-${W.toLowerCase()}` : `${C}${W}`;
+            return keep(m, built);
+        } },
+        // load-ticket prefix (EDGE_01) and its constants, and the "Edge inventory" feature
+        { re: /\bEDGE_/g, to: `${B.split(/\s+/)[0].replace(/[^A-Za-z0-9]/g, '').toUpperCase()}_` },
+        { re: /\bedge(?=[ _-]?inventory)/gi, fn: (m) => (m === 'Edge' ? 'Yard' : m === 'EDGE' ? 'YARD' : 'yard') },
+        // bare "Edge" meaning the company, in notes ("what Edge paid", "Edge's books"); "edge case" and "left edge" are left alone
+        { re: /(?<!Chrome\/|Safari, |Microsoft )\bEdge\b(?! cases?\b)/g, to: B.split(/\s+/)[0] },
+        { re: /\bEDGE\b/g, to: B.split(/\s+/)[0].toUpperCase() },
+        { re: /AAA[ _-]?Investments?/gi, fn: (m) => keep(m, `${B} Holdings`) },
+        // people and customers named in comments, defaults and fixtures
+        { re: /\bapsara\b/gi, fn: (m) => (m === 'Apsara' ? 'the owner' : keep(m, 'owner')) },
+        { re: /\bbose\b/gi, fn: (m) => keep(m, 'ops') },
+        { re: /zimex(glt)?/gi, fn: (m) => keep(m, 'carrier') },
+        { re: /metalco/gi, fn: (m) => keep(m, 'Metalworks') },
+        { re: /daekwang/gi, fn: (m) => keep(m, 'Buyerco') },
+        { re: /\bramesh\b/gi, fn: (m) => keep(m, 'Sam') },
+        { re: /radmetals/gi, fn: (m) => keep(m, slug) },
+    ];
+}
+const apply = (s, rules) => rules.reduce((t, r) => t.replace(r.re, r.fn || r.to), s);
+
+const LINKS = [];   // relative symlinks inside the repo (routes/helpers -> ../helpers). Recreated, not followed.
+function walk(dir, rel = '') {
+    const out = [];
+    for (const name of fs.readdirSync(path.join(dir, rel))) {
+        const r = rel ? `${rel}/${name}` : name;
+        if (SKIP.some((re) => re.test(r))) continue;
+        const st = fs.lstatSync(path.join(dir, r));
+        if (st.isSymbolicLink()) {
+            const target = fs.readlinkSync(path.join(dir, r));
+            const inside = !path.isAbsolute(target) && path.resolve(path.dirname(path.join(dir, r)), target).startsWith(ROOT + path.sep);
+            if (inside && dir === ROOT) LINKS.push({ rel: r, target });
+            continue;                                   // never follow one: a link out of the repo could pull in anything
+        }
+        if (st.isDirectory()) out.push(...walk(dir, r)); else out.push(r);
+    }
+    return out;
+}
+
+// What must NOT be in the output. A hit is a leak, so the script fails.
+const FORBIDDEN = [
+    /edge ?(metals?|trading|yard)/i, /edgemetals/i, /apsara/i, /\bbose@/i, /apg0596/i, /zimex/i, /metalco/i, /daekwang/i,
+    /(?<!Chrome\/|Safari, |Microsoft )\bEdge\b(?! cases?\b)/, /\bEDGE\b/, /938[ -]?2525/, /8056944193/, /devonshire/i, /\bfrisco\b/i, /radmetals/i,
+];
+
+function main() {
+    const B = brandOf(arg('name'));
+    const slug = String(arg('slug', B.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''))).replace(/[^a-z0-9-]/g, '');
+    if (!slug) throw new Error('--slug could not be worked out');
+    const out = path.resolve(arg('out', path.join(ROOT, '..', 'trials', slug)));
+    if (out === ROOT || out.startsWith(ROOT + path.sep)) throw new Error('the trial folder must be OUTSIDE the live repo (' + ROOT + ')');
+    if (fs.existsSync(out) && fs.readdirSync(out).length) throw new Error(`${out} already exists and is not empty; pick a new --out or remove it first`);
+    const email = arg('email', `owner@${slug}.example`);
+    const phone = arg('phone', '(555) 010-0100');
+    const port = Number(arg('port', 3100 + Math.floor(Math.random() * 800)));
+    const rules = buildRules({ B, slug, email, phone });
+
+    fs.mkdirSync(out, { recursive: true });
+    const copied = [];
+    for (const top of INCLUDE) {
+        const p = path.join(ROOT, top);
+        if (!fs.existsSync(p)) continue;
+        const files = fs.lstatSync(p).isDirectory() ? walk(ROOT, top) : [top];
+        for (const rel of files) {
+            if (SKIP.some((re) => re.test(rel))) continue;
+            const to = path.join(out, apply(rel, rules));       // file names too: a renamed token must still resolve
+            fs.mkdirSync(path.dirname(to), { recursive: true });
+            if (TEXT.test(rel)) fs.writeFileSync(to, apply(fs.readFileSync(path.join(ROOT, rel), 'utf8'), rules));
+            else fs.copyFileSync(path.join(ROOT, rel), to);
+            copied.push(rel);
+        }
+    }
+
+    for (const l of LINKS) {                                  // routes/helpers -> ../helpers, as in the live repo
+        const to = path.join(out, apply(l.rel, rules));
+        if (!fs.existsSync(to)) fs.symlinkSync(l.target, to);
+    }
+
+    // Apsara, 2026-11-19: "Remove outbound lound" — asked where, she chose "trial copies + manual only". So the
+    // Outbound Loads MENU ITEM is taken out of the copy; the live app keeps it. Only the menu: the page file, the
+    // /api/outbound-loads route and the data stay, because the Loads page reads its Sales from that same store
+    // (dashboard/app/01-core.js loads /api/outbound-loads and tags each row as a sale). Throws if the line moved,
+    // so a later edit to the menu cannot quietly put the item back in front of customers.
+    for (const rel of ['dashboard/app/01-core.js', 'dashboard/sidebar.js']) {
+        const f = path.join(out, apply(rel, rules));
+        const src = fs.readFileSync(f, 'utf8');
+        const re = /^[ \t]*\{ id: 'outbound-loads',[^\n]*\n/m;
+        if (!re.test(src)) throw new Error(`make-trial: Outbound Loads menu entry not found in ${rel}; update the hide rule`);
+        fs.writeFileSync(f, src.replace(re, ''));
+    }
+
+    try { fs.chmodSync(path.join(out, 'mobile-app/android/gradlew'), 0o755); } catch (e) { /* no android project */ }
+
+    // fresh credentials, never reused from anywhere
+    const pw = () => crypto.randomBytes(9).toString('base64').replace(/[^a-zA-Z0-9]/g, '').slice(0, 12) + crypto.randomInt(10, 99);
+    const creds = { admin: pw(), staff: pw(), user: pw() };
+    fs.writeFileSync(path.join(out, '.env'), [
+        `ADMIN_PASSWORD=${creds.admin}`, `STAFF_PASSWORD=${creds.staff}`, `APP_PASSWORD=${creds.user}`,
+        `API_PORT=${port}`, `DATA_DIR=${path.join(out, 'data')}`, 'TRIAL=1', '',
+    ].join('\n'));
+    fs.mkdirSync(path.join(out, 'data'), { recursive: true });
+    // FAKE bank details for the Documents > Bank tab. The real qb-settings/ is never copied (SKIP), so without
+    // this the tab showed a file-not-found error. Numbers are obviously sample values, not real accounts.
+    fs.mkdirSync(path.join(out, 'qb-settings'), { recursive: true });
+    fs.writeFileSync(path.join(out, 'qb-settings', 'bank-accounts.json'), JSON.stringify({
+        note: 'SAMPLE bank details for a trial copy. Replace with your own before giving them to a customer.',
+        accounts: [
+            { id: 'trading-sample', company: `${B} Trading`, address: '100 Main Street, Anytown, TX 75000', bank: 'Sample National Bank', bankAddress: '1 Bank Plaza, Anytown, TX 75000', accountNumber: '000123456789', wireRouting: '000000001', achRouting: '000000002', swift: 'SMPLUS33', taxId: '00-0000000', source: 'sample' },
+            { id: 'metals-sample', company: `${B} Metals`, address: '100 Main Street, Anytown, TX 75000', bank: 'Example Community Bank', bankAddress: '200 Market Street, Anytown, TX 75000', accountNumber: '000987654321', wireRouting: '000000003', achRouting: '000000004', swift: 'EXMPUS44', taxId: '00-0000001', source: 'sample' },
+        ],
+    }, null, 2));
+
+    // API only: no WhatsApp client, no scheduler, no Gmail, no QuickBooks, no Drive
+    fs.writeFileSync(path.join(out, 'trial-server.js'), `// ${B} trial: the yard app's API and dashboard only.
+const fs = require('fs'), path = require('path');
+for (const l of (fs.existsSync(path.join(__dirname, '.env')) ? fs.readFileSync(path.join(__dirname, '.env'), 'utf8') : '').split('\\n')) {
+    const m = l.match(/^([A-Z_]+)=(.*)$/); if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2];
+}
+const cfg = require('./config');
+require('./trial-contacts')(cfg);   // truckers/suppliers in data/, not Supabase (must run before api.js loads the routes)
+const { createApi } = require('./api');
+createApi().listen(cfg.API_PORT, () => console.log('[TRIAL] ${B} yard app on :' + cfg.API_PORT));
+`);
+    fs.copyFileSync(path.join(__dirname, 'trial-seed.js'), path.join(out, 'trial-seed.js'));
+    fs.copyFileSync(path.join(__dirname, 'trial-contacts.js'), path.join(out, 'trial-contacts.js'));
+
+    if (flag('link-modules') && fs.existsSync(path.join(ROOT, 'node_modules'))) fs.symlinkSync(path.join(ROOT, 'node_modules'), path.join(out, 'node_modules'), 'dir');
+
+    fs.writeFileSync(path.join(out, 'TRIAL-README.md'), `# ${B} — trial
+
+Start:   npm install && node trial-seed.js && node trial-server.js   (then open http://<server>:${port})
+Logins:  manager (everything)  ${creds.admin}
+         staff (loads only)    ${creds.staff}
+         team                  ${creds.user}
+Switch off: stop the process. Reset the demo: delete the data/ folder, run node trial-seed.js again.
+Not included: WhatsApp, Gmail, QuickBooks, Google Drive.
+`);
+
+    // ── the scan ──
+    const hits = [];
+    for (const rel of walk(out)) {
+        if (!TEXT.test(rel) && !/\.(png|jpg)$/.test(rel)) { /* binary: names only */ }
+        for (const f of FORBIDDEN) if (f.test(rel)) hits.push(`${rel} (file name) ~ ${f}`);
+        if (!TEXT.test(rel)) continue;
+        const text = fs.readFileSync(path.join(out, rel), 'utf8');
+        for (const f of FORBIDDEN) { const m = text.match(f); if (m) hits.push(`${rel} ~ ${f} "${m[0]}"`); }
+    }
+    console.log(`[trial] ${copied.length} files -> ${out}`);
+    console.log(`[trial] logins: admin ${creds.admin} / staff ${creds.staff} / team ${creds.user}   port ${port}`);
+    if (hits.length) {
+        console.error(`[trial] LEAK CHECK FAILED: ${hits.length} place(s) still carry something of the original business:`);
+        hits.slice(0, 40).forEach((h) => console.error('   ' + h));
+        process.exit(2);
+    }
+    console.log('[trial] leak check: clean');
+}
+try { main(); } catch (e) { console.error('[trial] ' + e.message); process.exit(1); }

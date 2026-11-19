@@ -171,8 +171,9 @@ const wait = (ms) => new Promise((r) => setTimeout(r, ms));
         for (const s of sites) {
             const btn = fs.readFileSync(path.join(ROOT, s.btn), 'utf8');
             const code = fs.readFileSync(path.join(ROOT, s.code), 'utf8');
-            ck(`${s.name}: every load/sale card has a Print PO button carrying its kind and id`, /class="btn btn-print-po" data-id="\$\{esc\(l\.id\)\}" data-kind="\$\{esc\(l\._kind \|\| 'purchase'\)\}"/.test(btn));
-            ck(`${s.name}: the button is wired`, /querySelectorAll\('\.btn-print-po'\)/.test(code) && /printPoFor\(btn\)/.test(code));
+            // Apsara 2026-11-19: "remove print po option in loads" (website + phone app).
+            // The card must not offer the button; the printing code below is kept.
+            ck(`${s.name}: load/sale cards no longer show a Print PO button`, !/btn-print-po"/.test(btn) && !/>Print PO</.test(btn));
             const src = code.slice(code.indexOf('async function printPoFor'));
             const calls = [];
             const delivered = [];

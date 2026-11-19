@@ -667,7 +667,7 @@ async function renumberLoad(oldId, newId) {
 // `from`/`to` are optional 'YYYY-MM-DD' strings (inclusive) — a load with no
 // date is excluded whenever a filter is active (can't place it in range),
 // but included when no filter is applied at all.
-function getInventoryReport(allLoads, { from, to } = {}) {
+function getInventoryReport(allLoads, { from, to, periodStock = false } = {}) {
     const { groupItemsByDescription } = require('./pdf');
     const filtered = (from || to)
         ? allLoads.filter(l => l.date && (!from || l.date >= from) && (!to || l.date <= to))
@@ -826,6 +826,54 @@ function getInventoryReport(allLoads, { from, to } = {}) {
         }
     }
 
+    // ── A DATE RANGE THAT STILL SHOWS STOCK (2026-11-20, website Inventory only) ─────────────────────────
+    // Apsara, on the dated view showing Rotors 51,990 "in" while the yard held 1,950: "when i give date specific,
+    // it is showing me wrong things". Under a date range the screen showed only what came IN, so a 50,040 lb sale
+    // in the same week was invisible and the number read as stock. With periodStock (sent only by the website's
+    // Inventory tab, ?stock=period) each row also gets:
+    //   shipped — sales dated inside the range
+    //   onHand  — everything bought up to the end date minus everything sold up to it (no end date = today, so it
+    //             equals the undated screen)
+    // OFF by default: the phone app, the PDF / Excel exports, the nightly inventory PDF and Scout call this
+    // without the flag and get exactly what they got before. onHandAvailable stays false under a range for them;
+    // the website reads periodAvailable instead. Undated purchases/sales count only when there is no end date,
+    // because without a date nobody can say whether they happened before it.
+    let periodAvailable = false;
+    if (periodStock && !wholeHistory) {
+        let outbound = null;
+        try { outbound = require('./outboundLoads').loadOutboundLoads(); } catch (e) { outbound = null; }
+        if (outbound) {
+            const AL = require('./itemAliases'), rowsP = AL.list();
+            const keyP = (raw) => AL.canonicalKey(String(raw || 'Other').trim(), rowsP) || String(raw || 'Other').trim().toLowerCase();
+            const upToEnd = (d) => (to ? (!!d && d <= to) : true);
+            const inRange = (d) => !!d && (!from || d >= from) && (!to || d <= to);
+            const per = new Map();                                   // key -> { label, boughtToEnd, soldToEnd, shippedIn }
+            const slot = (raw) => { const k = keyP(raw); if (!per.has(k)) per.set(k, { label: String(raw || 'Other').trim(), boughtToEnd: 0, soldToEnd: 0, shippedIn: 0 }); return per.get(k); };
+            for (const l of allLoads) {
+                if (!upToEnd(l && l.date)) continue;
+                for (const it of (Array.isArray(l.items) ? l.items : [])) slot(it && it.description).boughtToEnd += (Number(it && it.net_weight) || 0);
+            }
+            for (const o of outbound) {
+                for (const it of (Array.isArray(o.items) ? o.items : [])) {
+                    const w = Number(it && it.net_weight) || 0;
+                    if (upToEnd(o && o.date)) slot(it && it.description).soldToEnd += w;
+                    if (inRange(o && o.date)) slot(it && it.description).shippedIn += w;
+                }
+            }
+            byType = byType.map((g) => {
+                const p = per.get(keyP(g.description));
+                return { ...g, shipped: round2(p ? p.shippedIn : 0), onHand: round2(p ? p.boughtToEnd - p.soldToEnd : 0) };
+            });
+            // a material that only SHIPPED in the range still gets a row, so the sale is not invisible
+            for (const [k, p] of per) {
+                if (!p.shippedIn) continue;
+                if (byType.some((g) => keyP(g.description) === k)) continue;
+                byType.push({ description: p.label, count: 0, loadCount: 0, gross: 0, tare: 0, net: 0, amount: 0, shipped: round2(p.shippedIn), onHand: round2(p.boughtToEnd - p.soldToEnd) });
+            }
+            periodAvailable = true;
+        }
+    }
+
     const dayMap = new Map();
     for (const l of filtered) {
         const key = l.date || 'Unknown date';
@@ -904,6 +952,10 @@ function getInventoryReport(allLoads, { from, to } = {}) {
         // because a date filter is on — better than inferring it from an
         // undefined, which reads the same as "nothing shipped".
         onHandAvailable: wholeHistory && byType.some((g) => g.onHand !== undefined),
+        // true only when periodStock was asked for under a date range (website Inventory): shipped = inside the
+        // range, onHand = at the end date (periodEnd, null = today)
+        periodAvailable,
+        periodEnd: periodAvailable ? (to || null) : undefined,
         byType,
         byDay,
         bySeller,

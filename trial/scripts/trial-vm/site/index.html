@@ -1,0 +1,379 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Y.A.R.D. yard software</title>
+<meta name="description" content="Yard software for scrap and metal buyers and sellers. Weigh, pay, sell and invoice from one system. Try your own private copy free.">
+<style>
+@font-face{font-family:"Archivo";src:url("fonts/archivo-wdth.woff2") format("woff2");font-weight:100 900;font-stretch:62% 125%;font-display:swap}
+@font-face{font-family:"Source Sans 3";src:url("fonts/source-sans-3.woff2") format("woff2");font-weight:200 900;font-display:swap}
+@font-face{font-family:"IBM Plex Mono";src:url("fonts/plex-mono-400.woff2") format("woff2");font-weight:400;font-display:swap}
+@font-face{font-family:"IBM Plex Mono";src:url("fonts/plex-mono-500.woff2") format("woff2");font-weight:500;font-display:swap}
+
+/* Layout idea: the product is the proof. A dark steel opening band holds the real app, then alternating
+   text-and-screen rows on light grey, a four-stage flow for the order a yard works in, and plain answers last. */
+:root{
+  --ground:#ECEFF0;      /* galvanized grey */
+  --steel-dark:#16212B;  /* steel blue-black, the opening band and footer */
+  --ink:#16212B;
+  --steel:#55626E;       /* secondary text */
+  --rule:#C5CDD2;
+  --patina:#1D6B5C;      /* the one accent: verdigris */
+  --patina-deep:#134C40;
+  --patina-light:#7FD1BC;/* the accent on dark steel */
+  --display:"Archivo","Arial Narrow",Arial,sans-serif;
+  --body:"Source Sans 3","Segoe UI",Roboto,Arial,sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--ground);color:var(--ink);font:18px/1.55 var(--body);-webkit-font-smoothing:antialiased}
+img{max-width:100%;height:auto;display:block}
+a{color:var(--patina-deep)}
+:focus-visible{outline:3px solid var(--patina);outline-offset:2px}
+.wrap{max-width:1120px;margin:0 auto;padding:0 24px}
+h1,h2,h3{font-family:var(--display);text-wrap:balance;margin:0}
+
+.btn{display:inline-block;font:600 17px/1 var(--body);padding:14px 22px;border-radius:3px;text-decoration:none;background:var(--patina);color:#fff;border:2px solid var(--patina)}
+.btn{transition:background-color .15s,border-color .15s,color .15s}
+.btn:hover{background:var(--patina-deep);border-color:var(--patina-deep)}
+.btn.quiet{background:transparent;color:var(--ink);border-color:var(--ink)}
+.btn.quiet:hover{background:var(--ink);color:#fff}
+
+/* opening band */
+.band{background:var(--steel-dark);color:#E8EDF0}
+.band header .wrap{display:flex;align-items:center;justify-content:space-between;padding-top:22px;padding-bottom:22px}
+.mark{font-family:var(--display);font-stretch:125%;font-weight:800;font-size:22px;letter-spacing:.02em;text-decoration:none;color:#fff}
+.mark span{color:var(--patina-light)}
+.band nav{display:flex;align-items:center;gap:26px;font-size:16px}
+.band nav a{color:#AEB9C2;text-decoration:none}
+.band nav a:hover{color:#fff}
+.band nav .btn{padding:10px 16px;font-size:15px;color:#fff;background:var(--patina);border-color:var(--patina)}
+.hero{padding-top:36px;padding-bottom:0}
+.hero-text{max-width:760px}
+h1{font-stretch:112%;font-weight:700;font-size:clamp(34px,5.4vw,60px);line-height:1.05;letter-spacing:-.015em;color:#fff}
+.lead{font-size:20px;line-height:1.5;color:#B9C4CC;max-width:34em;margin:22px 0 30px}
+.cta{display:flex;flex-wrap:wrap;gap:12px}
+.band .btn.quiet{color:#fff;border-color:#8696A2}
+.band .btn.quiet:hover{background:#fff;color:var(--ink);border-color:#fff}
+.fine{font-size:15px;color:#93A1AC;margin:16px 0 0}
+.hero-shot{margin:48px auto 0;max-width:1000px;transform:translateY(0);position:relative;z-index:1;margin-bottom:-90px}
+
+/* screens */
+.screen{background:#0b0d0f;border-radius:8px;overflow:hidden;box-shadow:0 0 0 1px rgba(22,33,43,.35),0 28px 50px -22px rgba(22,33,43,.7)}
+.screen .bar{height:26px;background:#1d2630;display:flex;align-items:center;padding-left:12px;gap:6px}
+.screen .bar i{width:9px;height:9px;border-radius:50%;background:#44515d;display:block}
+.screen.plain .bar{display:none}
+.cap{font-size:14px;color:var(--steel);margin:12px 0 0}
+.band .cap{color:#93A1AC;text-align:center}
+
+/* flow */
+.flow{padding:150px 0 56px}
+.flow h2{max-width:20em}
+.stages{list-style:none;margin:36px 0 0;padding:0;display:grid;grid-template-columns:repeat(4,1fr);gap:0;border-top:2px solid var(--rule);counter-reset:s;position:relative}
+.stages:before{content:"";position:absolute;left:0;right:0;top:-2px;height:2px;background:var(--ink);transform-origin:left;transition:transform 1.4s cubic-bezier(.3,.1,.2,1)}
+.js .stages:before{transform:scaleX(0)}
+.js .stages.in:before{transform:scaleX(1)}
+.stages li{counter-increment:s;padding:18px 22px 6px 0}
+.stages li:before{content:counter(s);font-family:var(--display);font-stretch:112%;font-weight:700;font-size:15px;color:var(--patina);display:block;margin-bottom:6px}
+.stages b{font-family:var(--display);font-stretch:105%;font-weight:650;font-size:20px;display:block;margin-bottom:6px}
+.stages span{color:#2d3943;font-size:16px}
+
+.stages li{padding-right:20px}
+.viz{background:var(--steel-dark);color:#E8EDF0;border-radius:6px;padding:14px 16px;height:138px;margin-bottom:16px;font-family:var(--mono);font-size:13px;line-height:1.5;position:relative;overflow:hidden;display:flex;flex-direction:column;justify-content:center;gap:2px}
+.viz .r{display:flex;justify-content:space-between;gap:10px}
+.stages .viz .r span{color:#E8EDF0;font-size:inherit}
+.stages .viz .r span:first-child{color:#93A1AC}
+.stages .viz .net span,.stages .viz .r:has(.m) span:last-child,.stages .viz .r:has(.h) span:last-child{color:#fff}
+.stages .viz .small span{font-size:11px;color:#93A1AC}
+.viz .net,.viz .r:has(.m),.viz .r:has(.h){font-weight:500;font-size:15px;color:#fff;margin-top:4px;border-top:1px solid #3a4856;padding-top:6px}
+.viz .small{font-size:11px;margin-top:8px;color:#93A1AC}
+.v2 .stamp{position:absolute;right:14px;bottom:12px;border:2px solid var(--patina-light);color:var(--patina-light);font:500 15px var(--mono);letter-spacing:.12em;padding:1px 8px;border-radius:3px;transform:rotate(-8deg)}
+.v3{flex-direction:row;align-items:center;justify-content:center;gap:10px}
+.doc{background:#FBFAF5;border-radius:3px;width:30%;height:96px;padding:10px 8px 0;position:relative;box-shadow:0 2px 6px rgba(0,0,0,.4)}
+.doc i{display:block;height:5px;background:#C9CDD0;border-radius:2px;margin-bottom:6px}
+.doc i:nth-child(2){width:70%}.doc i:nth-child(3){width:85%}
+.doc em{position:absolute;left:0;right:0;bottom:8px;text-align:center;font:500 10px var(--mono);color:#22282e;font-style:normal}
+.meter{height:10px;background:#2a3846;border-radius:5px;overflow:hidden;margin:8px 0 2px}
+.meter i{display:block;height:100%;width:72%;background:var(--patina-light);border-radius:5px;transform-origin:left}
+/* starting positions exist only when script is running and the flow has not been reached; without script everything shows its end state */
+.viz .r,.v2 .stamp,.doc,.meter i{transition:opacity .5s ease,transform .7s cubic-bezier(.2,.8,.2,1);transition-delay:var(--d,0s)}
+.js .stages:not(.in) .viz .r{opacity:0;transform:translateY(8px)}
+.js .stages:not(.in) .v2 .stamp{opacity:0;transform:rotate(-8deg) scale(1.8)}
+.js .stages:not(.in) .doc{opacity:0;transform:translateY(22px)}
+.js .stages:not(.in) .meter i{transform:scaleX(0)}
+.doc:nth-child(2){transition-delay:calc(var(--d,0s) + .25s)}
+.doc:nth-child(3){transition-delay:calc(var(--d,0s) + .5s)}
+.v2 .stamp{transition-delay:calc(var(--d,0s) + .9s)}
+.stages + .cap{margin-top:18px}
+
+/* feature rows */
+.row{padding:64px 0;border-top:1px solid var(--rule)}
+.row .wrap{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.1fr);gap:64px;align-items:center}
+.row.flip .wrap{grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)}
+.row.flip .text{order:2}
+h2{font-stretch:108%;font-weight:700;font-size:clamp(26px,3.4vw,36px);line-height:1.12;letter-spacing:-.01em}
+.text p{color:#2d3943;margin:14px 0 0;max-width:30em}
+.text ul{margin:16px 0 0;padding:0;list-style:none;max-width:30em}
+.text li{padding:9px 0;border-top:1px solid var(--rule);color:#2d3943;font-size:17px}
+.text li:last-child{border-bottom:1px solid var(--rule)}
+.shot-narrow{max-width:340px}
+.shot-modal{max-width:420px}
+.row .shots{display:flex;justify-content:center}
+
+/* smaller capabilities */
+.more{padding:56px 0;border-top:1px solid var(--rule)}
+.more .wrap{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:40px}
+.more h3{font-stretch:105%;font-weight:650;font-size:20px;margin-bottom:8px}
+.more p{margin:0;color:#2d3943;font-size:17px}
+.more .head{grid-column:1/-1;margin-bottom:-8px}
+
+/* trial */
+.trial{padding:64px 0;border-top:1px solid var(--rule)}
+.trial .wrap{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.6fr);gap:48px}
+.intro{color:var(--steel);margin:12px 0 0;max-width:22em;font-size:17px}
+ol.seq{list-style:none;margin:0;padding:0;counter-reset:n}
+ol.seq li{counter-increment:n;display:grid;grid-template-columns:44px minmax(0,1fr);gap:14px;padding:16px 0;border-top:1px solid var(--rule)}
+ol.seq li:first-child{border-top:0;padding-top:0}
+ol.seq li:before{content:counter(n);font-family:var(--display);font-stretch:112%;font-weight:700;font-size:30px;line-height:1;color:var(--patina)}
+ol.seq b{display:block;font-weight:700}
+ol.seq span{color:#2d3943}
+.cols{display:grid;grid-template-columns:1fr 1fr;gap:48px}
+.cols h3{font-stretch:105%;font-weight:650;font-size:19px;margin-bottom:8px}
+.cols p{margin:0 0 12px;color:#2d3943}
+.split{padding:56px 0;border-top:1px solid var(--rule)}
+.split .wrap{display:grid;grid-template-columns:minmax(0,.8fr) minmax(0,1.6fr);gap:48px}
+details{border-top:1px solid var(--rule);padding:14px 0}
+details:last-of-type{border-bottom:1px solid var(--rule)}
+summary{cursor:pointer;font-weight:600;list-style:none;display:flex;justify-content:space-between;gap:16px}
+summary::-webkit-details-marker{display:none}
+summary:after{content:"+";font-family:var(--mono);color:var(--patina)}
+details[open] summary:after{content:"\2212"}
+details p{margin:10px 0 0;max-width:38em;color:#2d3943}
+
+/* The only motion: the screen rises into place once when the page opens, and the flow line draws across once when it is reached. */
+@keyframes rise{from{opacity:.3;transform:translateY(30px)}to{opacity:1;transform:none}}
+.hero-shot .screen{animation:rise .9s cubic-bezier(.2,.7,.2,1) .15s both}
+@media (prefers-reduced-motion:reduce){
+  .hero-shot .screen{animation:none}
+  .stages:before,.js .stages:before{transition:none;transform:none}
+  .viz .r,.v2 .stamp,.doc,.meter i{transition:none}
+  html{scroll-behavior:auto}
+  .btn{transition:none}
+}
+
+/* closing band */
+.end{background:var(--steel-dark);color:#E8EDF0;padding:72px 0}
+.end h2{color:#fff;font-size:clamp(28px,4vw,42px);max-width:15em}
+.end p{color:#B9C4CC;max-width:32em;margin:14px 0 26px}
+.end .btn.quiet{color:#fff;border-color:#8696A2}
+.end .btn.quiet:hover{background:#fff;color:var(--ink);border-color:#fff}
+.askline{font-size:15px;color:#93A1AC;margin-top:14px}
+footer{background:var(--steel-dark);color:#93A1AC;border-top:1px solid #2a3846;padding:22px 0 40px;font-size:14px}
+
+@media (max-width:860px){
+  .stages{grid-template-columns:1fr 1fr}
+  .row .wrap,.row.flip .wrap,.trial .wrap,.split .wrap{grid-template-columns:1fr;gap:28px}
+  .row.flip .text{order:0}
+  .more .wrap,.cols{grid-template-columns:1fr;gap:24px}
+  .band nav a:not(.btn){display:none}
+  .hero-shot{margin-bottom:-60px}
+  .flow{padding-top:100px}
+}
+@media (max-width:520px){.stages{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="band">
+  <header>
+    <div class="wrap">
+      <a class="mark" href="#top" id="top">Y<span>.</span>A<span>.</span>R<span>.</span>D<span>.</span></a>
+      <nav><a href="#flow">How it works</a><a href="#trial">The trial</a><a href="#questions">Questions</a><a class="btn" data-start href="#start">Start free</a></nav>
+    </div>
+  </header>
+  <div class="wrap hero">
+    <div class="hero-text">
+      <h1>Run the yard from the scale to the invoice.</h1>
+      <p class="lead">Y.A.R.D., Your Assistant for Receiving and Dispatch, is yard software for scrap and metal buyers and sellers. Record each load, keep weights and payments straight, and print the paperwork from the same record.</p>
+      <div class="cta">
+        <a class="btn" data-start href="#start">Try it free</a>
+        <a class="btn quiet" href="#flow">See how it works</a>
+      </div>
+      <p class="fine">Your own private copy in about a minute, with sample data. <span data-days></span> No card.</p>
+    </div>
+    <div class="hero-shot">
+      <div class="screen"><div class="bar"><i></i><i></i><i></i></div>
+        <img src="img/inventory.webp" width="1980" height="1180" alt="The Y.A.R.D. inventory screen listing each item type with loads, gross, net in, shipped, on hand and amount, for sample items such as rotors, auto cast and copper wire">
+      </div>
+    </div>
+  </div>
+</div>
+
+<main>
+<section class="flow" id="flow"><div class="wrap">
+  <h2>One record, from the first weighing to the books.</h2>
+  <ol class="stages">
+    <li style="--d:.3s"><div class="viz v1" aria-hidden="true"><div class="r"><span>Gross</span><span>18,420 lb</span></div><div class="r"><span>Tare</span><span>9,860 lb</span></div><div class="r net"><span>Net</span><span class="n" data-to="8560">8,560 lb</span></div></div><b>Buy and sell</b><span>Log loads in and out with gross, tare and net weight, item by item.</span></li>
+    <li style="--d:1.5s"><div class="viz v2" aria-hidden="true"><div class="r"><span>Outstanding</span><span class="m" data-to="4280">$0.00</span></div><div class="r"><span>Paid by</span><span>Bank transfer</span></div><div class="stamp">PAID</div></div><b>Pay and collect</b><span>Record what you pay suppliers and what buyers pay you.</span></li>
+    <li style="--d:2.7s"><div class="viz v3" aria-hidden="true"><div class="doc"><i></i><i></i><i></i><em>Ticket</em></div><div class="doc"><i></i><i></i><i></i><em>Invoice</em></div><div class="doc"><i></i><i></i><i></i><em>Packing list</em></div></div><b>Print the paperwork</b><span>Tickets, invoices, packing lists and purchase orders from the same entry.</span></li>
+    <li style="--d:3.9s"><div class="viz v4" aria-hidden="true"><div class="r"><span>On hand</span><span class="h" data-to="8560">8,560 lb</span></div><div class="meter"><i></i></div><div class="r small"><span>Sample item</span><span>from your loads</span></div></div><b>Know your stock</b><span>See what is on hand by item, day or seller, worked out from your loads.</span></li>
+  </ol>
+  <p class="cap">The panels above replay a sample load with made-up numbers.</p>
+</div></section>
+
+<section class="row"><div class="wrap">
+  <div class="text">
+    <h2>Every load, with its weights.</h2>
+    <p>Add a purchase or a sale, enter gross and tare, and the net works itself out. Each load keeps its items, its amount and its PDF ticket.</p>
+    <ul>
+      <li>Purchases and sales in one list, filtered by month, seller or item</li>
+      <li>Weight photos and the seller's signature stay on the ticket</li>
+      <li>Edit or delete a load and the stock follows it</li>
+    </ul>
+  </div>
+  <div class="shots"><div class="screen plain shot-narrow"><img src="img/loads.webp" width="670" height="1030" alt="Two load cards from the Y.A.R.D. loads list, one sale and one open purchase, each showing gross, tare and net weight and the amount, with buttons to generate a PDF, edit, delete and receive payment"></div></div>
+</div></section>
+
+<section class="row flip"><div class="wrap">
+  <div class="text">
+    <h2>Payments that settle against the load.</h2>
+    <p>Receive a payment against a sale or pay a supplier against a purchase. The screen shows the total, what has been received and what is still outstanding before you record anything.</p>
+    <ul>
+      <li>Cash, bank transfer and the other ways you actually pay</li>
+      <li>An optional reference for the cheque or transaction</li>
+      <li>It tells you when a payment settles the load in full</li>
+    </ul>
+  </div>
+  <div class="shots"><div class="screen plain shot-modal"><img src="img/payment.webp" width="940" height="1205" alt="The Y.A.R.D. receive payment window for a sample sale showing the amount outstanding, payment mode, date, amount and reference fields, and a note that the payment settles the load in full"></div></div>
+</div></section>
+
+<section class="row"><div class="wrap">
+  <div class="text">
+    <h2>Stock that matches your loads.</h2>
+    <p>Inventory is worked out live from every current load, so deleting or correcting a load changes the stock with it. Nothing to keep in step by hand.</p>
+    <ul>
+      <li>By item type, by day or by seller</li>
+      <li>Gross, net in, shipped and on hand for each item</li>
+      <li>Mark items ferrous or non-ferrous the first time you enter them</li>
+    </ul>
+  </div>
+  <div class="shots"><div class="screen"><div class="bar"><i></i><i></i><i></i></div><img src="img/stock-table.webp" width="1980" height="520" alt="The by item type table in Y.A.R.D. inventory with columns for loads, items, gross, tare, net in, shipped, on hand and amount"></div></div>
+</div></section>
+
+<section class="more"><div class="wrap">
+  <div class="head"><h2>And a few things that save time.</h2></div>
+  <div><h3>The assistant</h3><p>Type or speak a question about stock, a supplier's balance or a load. Ask it to record a payment and it waits for your confirmation first.</p></div>
+  <div><h3>Clean names</h3><p>Merge spellings of the same supplier, buyer or item so reports stop splitting one name into three.</p></div>
+  <div><h3>Phone and web</h3><p>Use it from a computer in the office or a phone at the scale. Both show the same data.</p></div>
+</div></section>
+
+<section class="trial" id="trial"><div class="wrap">
+  <div>
+    <h2>How the trial works</h2>
+    <p class="intro">Each trial is its own copy of Y.A.R.D. for your company. No other yard shares it.</p>
+  </div>
+  <ol class="seq">
+    <li><div><b>Get an invitation code</b><span>Trials are by invitation while we look after a small group of yards. Ask below and we send you a code.</span></div></li>
+    <li><div><b>Sign up and confirm your email</b><span>Enter the code and your company name, accept the free-trial agreement, then open the link we email you.</span></div></li>
+    <li><div><b>Your yard opens in about a minute</b><span>You receive an address, logins for manager, staff and team, and sample data. In the phone app, enter your address as the server.</span></div></li>
+    <li><div><b>Use it on your own work</b><span>The trial runs for <span data-days-plain></span>. When it ends it switches off and your data is archived.</span></div></li>
+  </ol>
+</div></section>
+
+<section class="split"><div class="wrap">
+  <div><h2>Before you start</h2></div>
+  <div class="cols">
+    <div>
+      <h3>What free means</h3>
+      <p>No card and no billing during the trial. You get your own logins and your own data, and sample data to look through before you enter anything real.</p>
+      <p>The full terms are in the free-trial agreement you accept at sign-up.</p>
+    </div>
+    <div>
+      <h3>What it does not do</h3>
+      <p>Record-keeping and reporting rules differ by state and city. Y.A.R.D. does not make you compliant on its own, so check what applies to your yard.</p>
+      <p>A trial ends, and we are inviting a small number of yards first, so there may be a short wait.</p>
+    </div>
+  </div>
+</div></section>
+
+<section class="split" id="questions"><div class="wrap">
+  <div><h2>Questions</h2></div>
+  <div>
+    <details><summary>Can another yard see my data?</summary><p>No. Each trial is a separate copy with its own passwords. Our team can reach the server it runs on.</p></details>
+    <details><summary>What happens when the trial ends?</summary><p>It switches off after <span data-days-plain></span>, and your data is archived instead of deleted. The agreement you accept at sign-up says what happens to it next.</p></details>
+    <details><summary>Do I need a card?</summary><p>No.</p></details>
+    <details><summary>Is there a phone app?</summary><p>Yes. Use the website on a computer and the app on a phone. Your address arrives when your trial is ready.</p></details>
+    <details><summary>Is it only for metal?</summary><p>It is built for scrap and metal yards: loads, weights, items and payments. If your yard works differently, say so when you ask for a code.</p></details>
+    <details><summary>Does it connect to accounting software?</summary><p>Not in the trial. Tell us what you use when you ask for a code.</p></details>
+  </div>
+</div></section>
+</main>
+
+<section class="end" id="start"><div class="wrap">
+  <h2>Start with your own copy.</h2>
+  <p>If you have an invitation code, start your trial now. If not, ask for one and tell us a little about your yard.</p>
+  <div class="cta">
+    <a class="btn" data-signup href="#start">I have a code</a>
+    <a class="btn quiet" data-ask href="#start">Ask for a code</a>
+  </div>
+  <p class="askline" id="askline"></p>
+</div></section>
+<footer><div class="wrap">Y.A.R.D. is offered as a free trial. Screens shown are the app with sample data. This page is not legal or accounting advice. <span id="year"></span></div></footer>
+
+<script>
+/* The only two things to set per deployment. Everything else comes from the address this page is served on. */
+var TRIAL_DAYS = 14;              /* must equal TRIAL_DAYS on the VM (trial-signup) */
+var ASK_EMAIL  = '';              /* empty means hello@<this domain>; set it to a mailbox you actually read */
+
+document.documentElement.className += ' js';
+(function(){
+  var st = document.querySelector('.stages');
+  if (st && 'IntersectionObserver' in window) {
+    var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    var count = function(el, to, fmt, from, delay){
+      if (reduce) { el.textContent = fmt(to); return; }
+      el.textContent = fmt(from);
+      setTimeout(function(){
+        var t0 = null, dur = 1100;
+        (function step(ts){ if (t0 === null) t0 = ts; var k = Math.min(1, (ts - t0) / dur), e = 1 - Math.pow(1 - k, 3);
+          el.textContent = fmt(Math.round(from + (to - from) * e)); if (k < 1) requestAnimationFrame(step); })(performance.now());
+      }, delay);
+    };
+    var lb = function(n){ return n.toLocaleString('en-US') + ' lb'; }, usd = function(n){ return '$' + n.toLocaleString('en-US') + '.00'; };
+    var play = function(){
+      st.classList.add('in');
+      count(st.querySelector('.n'), 8560, lb, 0, 300);
+      count(st.querySelector('.m'), 0, usd, 4280, 1500);
+      count(st.querySelector('.h'), 8560, lb, 0, 3900);
+    };
+    if (reduce) { st.classList.add('in'); }
+    else {
+      var io = new IntersectionObserver(function(es){ es.forEach(function(e){ if (e.isIntersecting) { play(); io.disconnect(); } }); }, {threshold:.25});
+      io.observe(st);
+    }
+  } else if (st) { st.classList.add('in'); }
+})();
+(function(){
+  var host = location.hostname || '';
+  var live = /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host) && !/(claude|localhost)/i.test(host);
+  var bare = host.replace(/^www\./,'');
+  var signupUrl = live ? 'https://signup.' + bare : '';
+  var email = ASK_EMAIL || (live ? 'hello@' + bare : '');
+  var days = TRIAL_DAYS + ' days';
+  [].forEach.call(document.querySelectorAll('[data-days]'), function(e){ e.textContent = days + '.'; });
+  [].forEach.call(document.querySelectorAll('[data-days-plain]'), function(e){ e.textContent = days; });
+  [].forEach.call(document.querySelectorAll('[data-signup],[data-start]'), function(a){ if (signupUrl) a.href = signupUrl; });
+  var ask = document.querySelector('[data-ask]'), line = document.getElementById('askline');
+  if (email) {
+    ask.href = 'mailto:' + email + '?subject=' + encodeURIComponent('Y.A.R.D. trial code') + '&body=' + encodeURIComponent('Company name:\nMetals you handle and loads per week:\nWhat you use today:\n');
+    line.textContent = 'Or write to ' + email;
+  } else {
+    ask.addEventListener('click', function(e){ e.preventDefault(); line.textContent = 'Preview only. On the live site this opens an email to your invitation mailbox.'; });
+  }
+  document.getElementById('year').textContent = new Date().getFullYear();
+})();
+</script>
+</body>
+</html>

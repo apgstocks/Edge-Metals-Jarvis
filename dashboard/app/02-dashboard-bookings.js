@@ -9,11 +9,15 @@ let invFrom = '', invTo = '', invSubTab = 'byType';
 function invByTypeHtml(data) {
   // See mobInvByTypeHtml in the app for why On hand is absent under a date
   // filter — same rule, same reason, both clients.
+  // 2026-11-20: under a date range the website now asks for stock too (?stock=period), so Shipped and On hand
+  // show there as well; periodAvailable says so. The phone app does not ask and keeps the old rule.
+  const stockCols = !!(data.onHandAvailable || data.periodAvailable);
+  const endLabel = data.periodAvailable ? (data.periodEnd ? toUsDate(data.periodEnd) : 'today') : '';
   return data.byType.length ? `
-    ${data.onHandAvailable ? '' : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Showing what came IN for this date range — clear the dates to see what\'s on hand.</div>'}
+    ${data.periodAvailable ? `<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Net in and Shipped are for these dates. On hand is what was left on ${esc(endLabel)}.</div>` : data.onHandAvailable ? '' : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Showing what came IN for this date range — clear the dates to see what\'s on hand.</div>'}
     <table style="width:100%; border-collapse:collapse; font-size:13px;">
       <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;" title="How many separate loads carried this item">Loads</th><th style="padding:8px 6px;" title="How many weighed lines, across all those loads">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${data.onHandAvailable ? '<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">On hand</th>' : ''}<th style="padding:8px 6px;">Amount</th>
+        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;" title="How many separate loads carried this item">Loads</th><th style="padding:8px 6px;" title="How many weighed lines, across all those loads">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${stockCols ? `<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">${data.periodAvailable ? 'On hand ' + esc(endLabel) : 'On hand'}</th>` : ''}<th style="padding:8px 6px;">Amount</th>
       </tr></thead>
       <tbody>
         ${data.byType.map(g => `<tr class="inv-type-row" data-inv-toggle="${esc(g.description)}" title="Show every ${esc(g.description)} line, load by load" style="border-bottom:1px solid var(--border-subtle); cursor:pointer;">
@@ -34,13 +38,13 @@ function invByTypeHtml(data) {
           <td style="padding:8px 6px;">${g.gross} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.tare} ${esc(data.unit)}</td>
           <td style="padding:8px 6px;">${g.net} ${esc(data.unit)}</td>
-          ${data.onHandAvailable ? `<td style="padding:8px 6px; color:var(--text-muted);">${g.shipped || 0} ${esc(data.unit)}</td>
+          ${stockCols ? `<td style="padding:8px 6px; color:var(--text-muted);">${g.shipped || 0} ${esc(data.unit)}</td>
           <td style="padding:8px 6px; font-weight:700; color:${g.onHand < 0 ? 'var(--status-danger)' : 'var(--text-strong)'};">${g.onHand} ${esc(data.unit)}${g.onHand < 0 ? ' ⚠' : ''}</td>` : ''}
           <td style="padding:8px 6px;">${g.amount != null ? fmtAmount(g.amount) : '—'}</td>
         </tr>
         <!-- The lines behind that row, per Apsara 2026-09-02. Empty and
              hidden until the type is opened; filled by renderInvLines. -->
-        <tr><td colspan="${data.onHandAvailable ? 9 : 7}" style="padding:0;"><div data-inv-lines="${esc(g.description)}" style="display:none;"></div></td></tr>`).join('')}
+        <tr><td colspan="${stockCols ? 9 : 7}" style="padding:0;"><div data-inv-lines="${esc(g.description)}" style="display:none;"></div></td></tr>`).join('')}
       </tbody>
     </table>
   ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
@@ -119,15 +123,16 @@ let invData = null;
 // says what it is: what came in.
 function invHeadlineStat(data) {
   const rows = data.byType || [];
-  const hand = !!data.onHandAvailable;
+  const hand = !!(data.onHandAvailable || data.periodAvailable);
   const total = rows.reduce((t, g) => t + (Number(hand ? g.onHand : g.net) || 0), 0);
-  return [hand ? 'on hand' : 'came in', esc((Math.round(total * 100) / 100).toLocaleString() + ' ' + (data.unit || 'lb'))];
+  return [data.periodAvailable ? 'on hand ' + (data.periodEnd ? toUsDate(data.periodEnd) : 'today') : hand ? 'on hand' : 'came in', esc((Math.round(total * 100) / 100).toLocaleString() + ' ' + (data.unit || 'lb'))];
 }
 
 async function renderInventory() {
   const params = new URLSearchParams();
   if (invFrom) params.set('from', invFrom);
   if (invTo) params.set('to', invTo);
+  if (invFrom || invTo) params.set('stock', 'period');   // shipped + on hand for the range too (2026-11-20)
   const qs = params.toString() ? '?' + params.toString() : '';
   const root = $('viewRoot');
   root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
@@ -1188,6 +1193,9 @@ async function inventoryAutoRefresh() {
   const params = new URLSearchParams();
   if (invFrom) params.set('from', invFrom);
   if (invTo) params.set('to', invTo);
+  // must ask exactly what renderInventory asked, or the comparison below always differs and the tab repaints
+  // every 30 seconds
+  if (invFrom || invTo) params.set('stock', 'period');
   const sentFrom = invFrom, sentTo = invTo;
   try {
     const fresh = await api('/api/loads/inventory' + (params.toString() ? '?' + params.toString() : ''));

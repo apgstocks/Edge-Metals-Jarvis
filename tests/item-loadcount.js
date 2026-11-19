@@ -172,7 +172,9 @@ section('D — and the screens show it');
     // The drill-down row spans the table; a stale colspan leaves a visible
     // gap the moment a column is added.
     ck('  the drill-down colspan follows the new column',
-       /colspan="\$\{data\.onHandAvailable \? 9 : 7\}"/.test(inv),
+       // 2026-11-20: the stock columns now also show under a date range on the website (stockCols); the
+       // drill-down must span 9 whenever they show, 7 when they do not
+       /colspan="\$\{(data\.onHandAvailable|stockCols) \? 9 : 7\}"/.test(inv),
        'colspan was not updated, so the expanded lines will not span the table');
 
     const out = fs.readFileSync(path.join(ROOT, 'dashboard/outbound-loads.html'), 'utf8');

@@ -1,0 +1,114 @@
+#!/usr/bin/env node
+// ── signup-server.js — the public "start your free trial" page, on the trial VM ──
+// A visitor types a company name and email, and gets their own isolated copy of the yard app in about a minute.
+//   node signup-server.js            serve (pm2 name: trial-signup, behind Caddy at signup.<domain>)
+//   node signup-server.js --expire   sweep: switch off trials older than TRIAL_DAYS (daily cron); data is archived first
+//   node signup-server.js --keep <slug>   mark a trial as a paying customer: it is never expired
+// No dependencies,. Env: SIGNUP_PORT, MAX_TRIALS, TRIAL_DAYS, REGISTRY, PROVISION, TRIAL_DOWN, SIGNUP_GEMINI.
+const http = require('http'), fs = require('fs'), path = require('path');
+const { spawn, spawnSync } = require('child_process');
+
+const PORT = Number(process.env.SIGNUP_PORT || 3099);
+const MAX_TRIALS = Number(process.env.MAX_TRIALS || 15);          // active trials at once: the VM's memory is the limit
+const TRIAL_DAYS = Number(process.env.TRIAL_DAYS || 14);
+const REGISTRY = process.env.REGISTRY || '/srv/trials-archive/signups.json';
+const PROVISION = process.env.PROVISION || '/usr/local/bin/trial-provision';
+const TRIAL_DOWN = process.env.TRIAL_DOWN || '/usr/local/bin/trial-down';
+const PER_IP_PER_HOUR = Number(process.env.PER_IP_PER_HOUR || 3);
+const RESERVED = new Set(['www', 'signup', 'admin', 'api', 'app', 'mail', 'smtp', 'ftp', 'ns1', 'ns2', 'root', 'demo', 'test', 'trial', 'trials', 'support', 'help', 'billing', 'status', 'static', 'assets', 'login', 'dashboard']);
+
+const load = () => { try { return JSON.parse(fs.readFileSync(REGISTRY, 'utf8')); } catch (e) { return { trials: [] }; } };
+const save = (r) => { fs.mkdirSync(path.dirname(REGISTRY), { recursive: true }); const t = REGISTRY + '.tmp'; fs.writeFileSync(t, JSON.stringify(r, null, 1)); fs.renameSync(t, REGISTRY); };
+const active = (r) => r.trials.filter((t) => !t.ended);
+
+function slugFor(company, taken) {
+    let base = company.toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 24).replace(/-+$/g, '');
+    if (base.length < 3) base = (base + '-yard').replace(/^-/, '');
+    if (RESERVED.has(base)) base += '-yard';
+    let s = base, n = 2;
+    while (taken.has(s) || RESERVED.has(s)) s = `${base}-${n++}`.slice(0, 30);
+    return s;
+}
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+const PAGE = (body) => `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Try the yard app free</title>
+<style>body{font:16px/1.5 system-ui,sans-serif;max-width:480px;margin:8vh auto;padding:0 18px;color:#1d2530}h1{font-size:24px;margin:0 0 6px}p.s{color:#566;margin:0 0 22px}
+label{display:block;font-weight:600;margin:14px 0 4px}input{width:100%;padding:11px;font-size:16px;border:1px solid #bcc5d0;border-radius:8px;box-sizing:border-box}
+button{margin-top:20px;width:100%;padding:13px;font-size:16px;font-weight:600;border:0;border-radius:8px;background:#1f6feb;color:#fff;cursor:pointer}button:disabled{opacity:.6}
+.err{background:#fde8e8;color:#8a1c1c;padding:10px 12px;border-radius:8px;margin-top:14px}.box{background:#f2f6fb;border-radius:10px;padding:14px 16px;margin:16px 0;word-break:break-all}.hp{position:absolute;left:-9999px}small{color:#667}</style></head><body>${body}</body></html>`;
+const FORM = (err, v = {}) => PAGE(`<h1>Try the yard app free</h1><p class="s">Your own copy with sample data, ready in about a minute. ${TRIAL_DAYS} days, no card needed.</p>
+<form method="post" action="/signup" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Setting up your yard… (about a minute)'">
+<label>Company name</label><input name="company" required minlength="2" maxlength="40" value="${esc(v.company || '')}" autocomplete="organization">
+<label>Your email</label><input name="email" type="email" required value="${esc(v.email || '')}" autocomplete="email">
+<input class="hp" name="website" tabindex="-1" autocomplete="off">
+${err ? `<div class="err">${esc(err)}</div>` : ''}<button>Start my free trial</button><p><small>Sample data only. Don't enter real customer or ID details during the trial.</small></p></form>`);
+const DONE = (t) => PAGE(`<h1>Your yard is ready</h1><p class="s">Save these now. We only show them once.</p>
+<div class="box"><b>Address</b><br><a href="${esc(t.url)}">${esc(t.url)}</a></div>
+<div class="box"><b>Manager login</b> (everything)<br>${esc(t.admin)}<br><br><b>Staff login</b> (loads only)<br>${esc(t.staff)}</div>
+<p>Phone app: open it and type the address above as the server.</p><p><small>Your trial runs for ${TRIAL_DAYS} days.</small></p>`);
+
+const hits = new Map();                                              // ip -> [timestamps]
+const tooMany = (ip) => { const now = Date.now(), l = (hits.get(ip) || []).filter((x) => now - x < 3600e3); hits.set(ip, l); if (l.length >= PER_IP_PER_HOUR) return true; l.push(now); return false; };
+let busy = false;                                                    // one provision at a time: ports, pm2 and Caddy are shared
+
+function readBody(req) {
+    return new Promise((res, rej) => { let b = ''; req.on('data', (c) => { b += c; if (b.length > 4096) { rej(new Error('too large')); req.destroy(); } }); req.on('end', () => res(b)); req.on('error', rej); });
+}
+function provision(slug, company, email) {
+    return new Promise((resolve, reject) => {
+        const env = { ...process.env, NO_GEMINI: process.env.SIGNUP_GEMINI === '1' ? '0' : '1' };       // self-serve trials get no AI key unless the owner chose to
+        const p = spawn('node', [PROVISION, slug, company, '--email', email], { env, stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '', err = ''; p.stdout.on('data', (d) => out += d); p.stderr.on('data', (d) => err += d);
+        const kill = setTimeout(() => p.kill('SIGKILL'), 300000);
+        p.on('close', (code) => { clearTimeout(kill); const m = out.match(/^RESULT (.*)$/m); if (code === 0 && m) resolve(JSON.parse(m[1])); else reject(new Error((err || out).slice(0, 300))); });
+    });
+}
+
+async function handle(req, res) {
+    const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+    const send = (code, html) => { res.writeHead(code, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store', 'x-content-type-options': 'nosniff' }); res.end(html); };
+    if (req.method === 'GET' && req.url === '/health') return send(200, 'ok');
+    if (req.method === 'GET' && (req.url === '/' || req.url.startsWith('/?'))) return send(200, FORM());
+    if (req.method !== 'POST' || req.url !== '/signup') return send(404, PAGE('<h1>Not found</h1>'));
+    let f; try { f = Object.fromEntries(new URLSearchParams(await readBody(req))); } catch (e) { return send(413, FORM('That request was too large.')); }
+    const company = String(f.company || '').trim().replace(/\s+/g, ' '), email = String(f.email || '').trim().toLowerCase();
+    if (f.website) return send(200, FORM());                           // a bot filled the hidden box: look like success, do nothing
+    if (company.length < 2 || company.length > 40 || /[<>"'`\\$]/.test(company)) return send(400, FORM('Please enter your company name (2 to 40 letters or numbers, no quotes or symbols).', f));
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 80) return send(400, FORM('That email address does not look right.', f));
+    if (tooMany(ip)) return send(429, FORM('Too many sign-ups from this connection. Please try again in an hour.', f));
+    if (busy) return send(503, FORM('Another trial is being set up right now. Please try again in a minute.', f));
+    busy = true;
+    try {
+        const reg = load();
+        if (reg.trials.some((t) => t.email === email)) return send(409, FORM('That email already has a trial. Check your saved details, or contact us.', f));
+        if (active(reg).length >= MAX_TRIALS) return send(503, FORM('We are full for the moment. Please try again soon.', f));
+        const slug = slugFor(company, new Set(reg.trials.map((t) => t.slug)));
+        const t = await provision(slug, company, email);
+        reg.trials.push({ slug, company, email, created: new Date().toISOString(), keep: false });
+        save(reg);
+        return send(200, DONE(t));
+    } catch (e) {
+        console.error('[signup] provision failed:', e.message);
+        return send(500, FORM('Something went wrong setting up your yard. Please try again in a minute.', f));
+    } finally { busy = false; }
+}
+
+function expire() {
+    const reg = load(), cutoff = Date.now() - TRIAL_DAYS * 86400e3; let n = 0;
+    for (const t of reg.trials) {
+        if (t.ended || t.keep || new Date(t.created).getTime() > cutoff) continue;
+        const r = spawnSync('bash', [TRIAL_DOWN, t.slug], { encoding: 'utf8' });
+        if (r.status === 0) { t.ended = new Date().toISOString(); n++; console.log('[expire] switched off ' + t.slug); }
+        else console.error('[expire] could not switch off ' + t.slug + ': ' + (r.stderr || r.stdout).slice(0, 200));
+    }
+    save(reg); console.log(`[expire] ${n} trial(s) switched off`);
+}
+function keep(slug) {
+    const reg = load(), t = reg.trials.find((x) => x.slug === slug);
+    if (!t) { console.error('no trial called ' + slug); process.exit(1); }
+    t.keep = true; save(reg); console.log(slug + ' will not expire');
+}
+
+if (process.argv.includes('--expire')) expire();
+else if (process.argv.includes('--keep')) keep(process.argv[process.argv.indexOf('--keep') + 1]);
+else if (require.main === module) http.createServer((q, s) => handle(q, s).catch((e) => { console.error(e); s.writeHead(500); s.end('error'); })).listen(PORT, '127.0.0.1', () => console.log('[signup] on 127.0.0.1:' + PORT));

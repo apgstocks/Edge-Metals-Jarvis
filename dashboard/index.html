@@ -587,6 +587,11 @@ body.nav-collapsed main { padding-top:58px; }
        form did. Self-contained: injects its own markup and styles, and
        reuses whatever api() the host already defines. -->
   <script src="yard-bot.js"></script>
+  <!-- English / Spanish switch for the YARD screens only (Apsara 2026-11-19, "yard only and website").
+       English is the default and the page is untouched until someone picks ES. Kept OUT of the
+       numbered app parts above on purpose: helpers/sourceParts.js rebuilds those into the old single
+       script for ~100 tests, and this file must not change what they render. -->
+  <script src="yard-lang.js"></script>
   <!-- "Hey Jarvis" on the laptop. Apsara 2026-09-05.
        voice-machine.js MUST load first: it is the pure reducer that owns the
        rule about when the microphone may be open, and voice.js only carries
