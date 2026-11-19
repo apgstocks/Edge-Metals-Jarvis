@@ -1483,7 +1483,54 @@ body[data-theme="light"] {
         <button class="verify-subtab-btn" data-verify-subtab="pan-metal">Pan Metal</button>
       </div>
       <div id="verifyPanelJoey">
-        <div class="placeholder-note">Joey commission verification isn't built here yet — this sub-tab is a placeholder.<br><span style="font-size:11px;">The Invoice sheet's Commission columns are already mapped (helpers/invoiceSheet.js) — tell me what should be cross-checked against them and I'll build it.</span></div>
+        <!-- Apsara, 2026-11-20: "similar to pan metals .. build for joey" — his invoice
+             (EM-261014-01) and Commission List. Built like the Pan Metal panel below,
+             but keyed by container, with claim lines and an optional second opinion. -->
+        <div class="section-label" style="margin-top:0;">Upload Joey's commission invoice</div>
+        <label id="joeyDropZone" style="display:flex; align-items:center; gap:16px; border:2px dashed var(--border-default); border-radius:var(--radius-sm); padding:18px 20px; background:var(--surface-sunken); cursor:pointer;">
+          <input type="file" id="joeyPdfInput" accept="application/pdf" multiple class="hidden">
+          <span style="color:var(--accent); font-size:20px;">⇪</span>
+          <div>
+            <div style="font-size:13.5px; font-weight:600; color:var(--text-strong);" id="joeyDropLabel">Drop Joey's commission invoice PDF here</div>
+            <div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); margin-top:3px;">Each line is matched to the Invoice sheet by container and MT; our weight × our rate must equal what he billed. Claim lines are listed and netted off.</div>
+          </div>
+        </label>
+        <div id="joeyFileList" style="display:flex; flex-wrap:wrap; gap:6px; margin-top:10px;"></div>
+        <label style="display:flex; align-items:center; gap:10px; margin-top:12px; font-size:12.5px; color:var(--text-muted); cursor:pointer;">
+          <input type="file" id="joeyListInput" accept=".xlsx" class="hidden">
+          <span class="btn btn-secondary" style="padding:6px 12px; font-size:12px;" id="joeyListBtn">Add his Commission List (optional)</span>
+          <span id="joeyListName" style="font-family:var(--font-mono); font-size:11px;">The first tab of his workbook is read as the current round.</span>
+        </label>
+        <div style="margin-top:14px;">
+          <button id="btnJoeyVerify" type="button" class="btn btn-primary" style="padding:10px 18px;">Run Verification</button>
+        </div>
+        <div id="joeyLoading" class="hidden" style="display:flex; align-items:center; gap:10px; margin-top:16px; font-size:12px; color:var(--text-muted);">
+          <span class="btn-spinner"></span> Reading the invoice and cross-checking against the Invoice sheet…
+        </div>
+        <div id="joeySummary" class="hidden" style="display:flex; gap:10px; flex-wrap:wrap; margin-top:18px;"></div>
+        <div id="joeyNotes" style="margin-top:10px;"></div>
+        <div id="joeyResultsWrap" class="hidden" style="margin-top:14px;">
+          <div class="section-label">Invoice lines vs. Invoice sheet</div>
+          <div id="joeyFilterNote"></div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table" id="joeyResultsTable">
+              <thead>
+                <tr><th>Contract</th><th>Container</th><th>Inv No.</th><th>MT (ours)</th><th>Rate used</th><th>Calculated</th><th>Invoice says</th><th>Difference</th><th>His list</th><th>Status</th></tr>
+              </thead>
+              <tbody id="joeyResultsBody"></tbody>
+            </table>
+          </div>
+        </div>
+        <div id="joeySheetOnlyWrap" class="hidden" style="margin-top:18px;">
+          <div class="section-label">Joey's containers on the Invoice sheet with a weight, not on this invoice</div>
+          <div style="font-size:11px; color:var(--text-faint); margin-top:-6px; margin-bottom:8px;">Not scoped to a period — containers billed on earlier invoices appear here too.</div>
+          <div class="inv-line-table-wrap">
+            <table class="inv-line-table">
+              <thead><tr><th>Inv No.</th><th>Consignee</th><th>Container No.</th><th>Weight (MT)</th><th>Rate</th></tr></thead>
+              <tbody id="joeySheetOnlyBody"></tbody>
+            </table>
+          </div>
+        </div>
       </div>
       <div id="verifyPanelPanMetal" class="hidden">
         <div class="section-label" style="margin-top:0;">Upload Pan Metal commission debit note</div>
@@ -2854,6 +2901,132 @@ $('btnPanMetalVerify').addEventListener('click', async () => {
     $('panMetalLoading').classList.add('hidden');
   }
 });
+
+// ── JOEY COMMISSION VERIFICATION (2026-11-20) ────────────────────────────
+// Mirrors the Pan Metal block above, own ids and state; nothing shared is changed.
+let joeyFiles = [];      // [{ name, base64 }]
+let joeyList = null;     // { name, base64 } — his Commission List, optional
+function renderJoeyFileList() {
+  $('joeyFileList').innerHTML = joeyFiles.map((f, i) => `
+    <span style="display:inline-flex; align-items:center; gap:6px; background:var(--surface-sunken); border:1px solid var(--border-default); border-radius:var(--radius-xs); padding:4px 10px; font-size:12px;">
+      📄 ${esc(f.name)}
+      <button type="button" class="joey-file-remove" data-i="${i}" style="background:none; border:none; color:var(--text-faint); cursor:pointer; font-size:12px; padding:0;">✕</button>
+    </span>`).join('');
+  $('joeyFileList').querySelectorAll('.joey-file-remove').forEach((el) => el.addEventListener('click', () => { joeyFiles.splice(Number(el.dataset.i), 1); renderJoeyFileList(); }));
+  $('joeyDropLabel').textContent = joeyFiles.length ? `${joeyFiles.length} file${joeyFiles.length === 1 ? '' : 's'} ready — drop more or click to add` : "Drop Joey's commission invoice PDF here";
+}
+function handleJoeyFiles(fileList) {
+  Array.from(fileList || []).forEach((f) => {
+    if (f.type !== 'application/pdf') return;
+    const reader = new FileReader();
+    reader.onload = () => { joeyFiles.push({ name: f.name, base64: reader.result.split(',')[1] }); renderJoeyFileList(); };
+    reader.readAsDataURL(f);
+  });
+}
+$('joeyPdfInput').addEventListener('change', () => { handleJoeyFiles($('joeyPdfInput').files); $('joeyPdfInput').value = ''; });
+$('joeyDropZone').addEventListener('dragover', (e) => e.preventDefault());
+$('joeyDropZone').addEventListener('drop', (e) => { e.preventDefault(); handleJoeyFiles(e.dataTransfer.files); });
+$('joeyListInput').addEventListener('change', () => {
+  const f = $('joeyListInput').files[0]; $('joeyListInput').value = '';
+  if (!f) return;
+  const reader = new FileReader();
+  reader.onload = () => { joeyList = { name: f.name, base64: reader.result.split(',')[1] }; $('joeyListName').textContent = f.name; };
+  reader.readAsDataURL(f);
+});
+
+const JOEY_STATUS_BADGE = {
+  match: { label: 'Match', bg: 'rgba(87,190,73,.15)', color: '#7fd172' },
+  mismatch: { label: 'Mismatch', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  weight_differs: { label: 'MT differs', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+  not_in_sheet: { label: 'Not on sheet', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  claim_deduction: { label: 'Claim deduction', bg: 'rgba(58,110,165,.18)', color: '#8db8e8' },
+  no_container_on_pdf: { label: 'No container read', bg: 'rgba(217,154,43,.15)', color: '#e3b567' },
+  no_rate_available: { label: 'No rate available', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  pdf_commission_unreadable: { label: 'Amount unreadable', bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' },
+  extraction_failed: { label: 'Extraction failed', bg: 'rgba(197,64,47,.15)', color: '#e58a7c' },
+};
+function joeyBadge(status) {
+  const b = JOEY_STATUS_BADGE[status] || { label: status, bg: 'rgba(126,136,145,.15)', color: '#a7b0b7' };
+  return `<span style="display:inline-block; padding:3px 9px; border-radius:999px; font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.04em; background:${b.bg}; color:${b.color};">${esc(b.label)}</span>`;
+}
+function joeyListCell(r) {
+  if (!r.list) return '<span style="color:var(--text-faint);">—</span>';
+  if (!r.list.found) return `<span style="color:#e3b567;" title="${esc(r.list.why)}">not on list</span>`;
+  if (!r.list.same_mt) return `<span style="color:#e58a7c;" title="${esc(r.list.why)}">MT differs</span>`;
+  return r.list.agrees ? '<span style="color:#7fd172;">agrees</span>' : `<span style="color:#e58a7c;" title="${esc(r.list.why)}">differs</span>`;
+}
+function renderJoeyResults(result) {
+  VERIFY_RENDER.joey = () => renderJoeyResults(result);
+  const matched = result.matched || [], sheetOnly = result.sheet_only || [];
+  const t = result.totals || {};
+  const summaryChips = verifyAllChip('joey', matched.length) + verifyStatusChips('joey', matched, [
+    { key: 'match', label: 'Match' }, { key: 'mismatch', label: 'Mismatch' }, { key: 'weight_differs', label: 'MT differs' },
+    { key: 'not_in_sheet', label: 'Not on sheet' }, { key: 'claim_deduction', label: 'Claims' },
+  ]);
+  const log = result.sheet_log || {};
+  const logChip = log.error
+    ? `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:rgba(197,64,47,.15); border:1px solid var(--border-default); color:#e58a7c;">Sheet log failed: ${esc(log.error)}</span>`
+    : `<span style="font-size:11px; padding:5px 12px; border-radius:var(--radius-xs); background:var(--surface-sunken); border:1px solid var(--border-default); color:var(--text-body);">Logged to "Joey" tab: ${(log.logged || 0) + (log.updated || 0)}</span>`;
+  $('joeySummary').innerHTML = summaryChips + verifyStaticChip(`Not on this invoice: <strong style="color:var(--text-strong);">${sheetOnly.length}</strong>`) + logChip;
+  $('joeySummary').classList.remove('hidden');
+
+  // The totals, said plainly. A stated total that differs from the lines is the
+  // thing she would otherwise only find when paying.
+  const notes = [];
+  notes.push(`Lines add to <strong>${fmtMoney(t.lines)}</strong>${t.claims ? `, claims ${fmtMoney(t.claims)}, net <strong>${fmtMoney(t.net)}</strong>` : ''}.`);
+  if (t.stated != null) notes.push(Math.abs(t.total_diff) > 0.5
+    ? `<span style="color:#e58a7c;">His invoice total is ${fmtMoney(t.stated)} — ${fmtMoney(Math.abs(t.total_diff))} ${t.total_diff > 0 ? 'more' : 'less'} than his own lines. Ask him before paying.</span>`
+    : `His invoice total is ${fmtMoney(t.stated)}${Math.abs(t.total_diff) > 0.005 ? ` (${fmtMoney(Math.abs(t.total_diff))} from his lines — per-line rounding)` : ''}.`);
+  if (result.list) {
+    notes.push(`His list ("${esc(result.list.tab)}"): ${result.list.lines} lines, net ${fmtMoney(result.list.sum)}.`);
+    if (result.list.not_invoiced && result.list.not_invoiced.length) notes.push(`<span style="color:#e3b567;">${result.list.not_invoiced.length} line(s) on his list are not on this invoice: ${result.list.not_invoiced.slice(0, 6).map((l) => esc(l.container_no)).join(', ')}${result.list.not_invoiced.length > 6 ? '…' : ''}</span>`);
+  }
+  if (result.list_error) notes.push(`<span style="color:#e58a7c;">Could not read his list: ${esc(result.list_error)}</span>`);
+  $('joeyNotes').innerHTML = notes.map((n) => `<div style="font-size:12.5px; color:var(--text-muted); margin-top:4px;">${n}</div>`).join('');
+
+  const rows = verifyApply('joey', matched);
+  $('joeyFilterNote').innerHTML = verifyFilterNote('joey', rows.length, matched.length);
+  $('joeyResultsBody').innerHTML = rows.map((r) => r.status === 'claim_deduction' ? `
+    <tr><td style="font-family:var(--font-mono);">${esc(r.contract_no || '')}</td><td colspan="5" style="color:var(--text-muted);">${esc(r.label || 'Claim deduction')}</td>
+    <td>${fmtMoney(r.commission)}</td><td>—</td><td>—</td><td>${joeyBadge(r.status)}</td></tr>` : `
+    <tr>
+      <td style="font-family:var(--font-mono);">${esc(r.contract_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.container_no || '—')}</td>
+      <td style="font-family:var(--font-mono);">${esc(r.sheet ? r.sheet.inv_no : '')}</td>
+      <td>${r.sheet && r.sheet.weight != null ? r.sheet.weight : '—'}</td>
+      <td>${r.rate_used == null ? '—' : fmtMoney(r.rate_used) + (r.rate_source === 'pdf_fallback' ? ' (from invoice)' : '') + (r.rate_differs ? ` ≠ ${fmtMoney(r.comm_per_mt)} on invoice` : '')}</td>
+      <td>${fmtMoney(r.calculated)}</td>
+      <td>${fmtMoney(r.commission)}</td>
+      <td>${r.delta == null ? '—' : (r.delta > 0 ? '+' : '') + fmtMoney(r.delta)}</td>
+      <td>${joeyListCell(r)}</td>
+      <td>${joeyBadge(r.status)}</td>
+    </tr>`).join('') || verifyEmptyRow('joey', 10, 'No lines extracted.');
+  $('joeyResultsWrap').classList.remove('hidden');
+  $('joeySheetOnlyBody').innerHTML = sheetOnly.map((r) => `
+    <tr><td style="font-family:var(--font-mono);">${esc(r.inv_no || '')}</td><td>${esc(r.consignee || '')}</td><td>${esc(r.container_no || '')}</td>
+    <td>${r.weight != null ? r.weight : '—'}</td><td>${r.commission_rate != null ? fmtMoney(r.commission_rate) : '—'}</td></tr>`).join('')
+    || `<tr><td colspan="5" style="text-align:center; color:var(--text-faint);">Nothing outstanding.</td></tr>`;
+  $('joeySheetOnlyWrap').classList.remove('hidden');
+}
+$('btnJoeyVerify').addEventListener('click', async () => {
+  verifyActive('joey').clear();
+  if (!joeyFiles.length) { alert("Drop Joey's commission invoice PDF first."); return; }
+  const btn = $('btnJoeyVerify');
+  setButtonLoading(btn, true, 'Running…');
+  $('joeyLoading').classList.remove('hidden');
+  $('joeySummary').classList.add('hidden');
+  $('joeyResultsWrap').classList.add('hidden');
+  try {
+    const result = await api('/api/verify/joey', { method: 'POST', body: JSON.stringify({ pdfs: joeyFiles, list: joeyList }) });
+    renderJoeyResults(result);
+  } catch (e) {
+    alert(e.message);
+  } finally {
+    setButtonLoading(btn, false);
+    $('joeyLoading').classList.add('hidden');
+  }
+});
+
 
 let jioFiles = []; // [{ name, base64 }]
 function renderJioFileList() {

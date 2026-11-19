@@ -589,6 +589,68 @@ Return the JSON object and nothing else.`;
     return null;
 }
 
+// ── Multimodal: extract lines from a Joey (Hynos) commission INVOICE ─────────
+// Apsara, 2026-11-20 (his real invoice EM-261014-01): a table of one row per
+// container line — Contract No., B/L No., Container No., MT, Com/MT, Total,
+// Buyer. Unlike Pan Metal's debit note: a contract number is printed only on
+// the FIRST line of a contract (the next line for the same container leaves it
+// blank, and its Item is a ditto mark), a container can have two lines, and
+// there are claim lines such as "Deduct Claim (US$200.00)". helpers/
+// joeyCommission.js does the checking; this only reads what is printed.
+async function extractJoeyCommissionInvoice(pdfBase64, retries = 2) {
+    if (!pdfBase64) throw new Error('pdfBase64 required');
+    const prompt = `You are a commission billing expert. This PDF is a COMMISSION INVOICE from a Korean agent (Hynos / Joey) to Edge Metals Inc: a table with one row per container line. Extract EVERY row. Return ONLY raw JSON.
+
+{
+  "records": [
+    {
+      "contract_no": null,   // e.g. "26JY41". If this row leaves it blank (a second line for the same container), repeat the contract no. of the row above.
+      "bl_no": null,         // e.g. "GLTOEH-25980"
+      "container_no": null,  // 4 letters + 7 digits
+      "mt": 0,               // the MT column, plain number, e.g. 18.452
+      "comm_per_mt": 0,      // the "Com/MT" rate, plain number (10 for "$10")
+      "commission": 0,       // the row's Total, plain number (184.52 for "US$184.52")
+      "buyer": null,
+      "item": null
+    }
+  ],
+  "claims": [              // rows that DEDUCT money, such as "Deduct Claim (US$200.00)". NOT in records.
+    { "contract_no": null, "label": null, "amount": 0 }   // amount as a positive number
+  ],
+  "invoice_no": null,      // e.g. "EM-261014-01"
+  "invoice_date": null,    // MM/DD/YYYY
+  "total": 0               // the invoice's grand Total at the bottom, plain number
+}
+
+Do not skip rows that look repetitive. Do not invent rows. Return the JSON object and nothing else.`;
+    let lastErr = null;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+        try {
+            const model = getClient().getGenerativeModel({
+                model: getModelName(),
+                generationConfig: { temperature: 0, responseMimeType: 'application/json' },
+            });
+            const result = await model.generateContent([
+                { text: prompt },
+                { inlineData: { mimeType: 'application/pdf', data: pdfBase64 } },
+            ]);
+            const parsed = extractJson(result.response.text());
+            if (parsed && Array.isArray(parsed.records)) {
+                console.log(`[GEMINI] Joey commission invoice: ${parsed.records.length} line(s), ${(parsed.claims || []).length} claim(s), no=${parsed.invoice_no || '?'}`);
+                return parsed;
+            }
+            console.warn(`[GEMINI] Joey commission invoice returned unparseable JSON (attempt ${attempt + 1})`);
+        } catch (err) {
+            lastErr = err;
+            const transient = /503|429|overloaded|unavailable|high demand/i.test(err.message);
+            if (attempt < retries && transient) { await new Promise(r => setTimeout(r, 1200 * (attempt + 1))); continue; }
+            if (attempt >= retries || !transient) throw err;
+        }
+    }
+    if (lastErr) throw lastErr;
+    return null;
+}
+
 // ── Multimodal: extract line items from a Jio Transport trucking invoice ────
 // Used by the Verification tab's Transport → Jio sub-tab. Per Apsara's
 // worked example (real files: Invoice_8559.pdf, Invoice_8635.pdf) — one PDF
@@ -4443,4 +4505,4 @@ function modelReportLines() {
 // alternative was a ninth near-identical extract* function living here, far
 // from the store it feeds.
 module.exports = {
-    extractOrderPdfFields, getClient, getModelName, effectiveModels, modelReportLines, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, extractGardunosInvoiceRecords, extractEagleInvoiceRecords, transcribeVoiceNote };
+    extractOrderPdfFields, getClient, getModelName, effectiveModels, modelReportLines, callGeminiJSON, extractJson, lastGeminiFailure, extractPdfFields, extractBookingFieldsFromText, resolveCutoffDate, classifyDocument, extractScaleTicketFields, extractWeightFromImage, checkPhotoQuality, extractFreightInvoiceRecords, extractCommissionDebitNoteRecords, extractJoeyCommissionInvoice, extractJioInvoiceRecords, extractSherTruckingInvoiceRecords, extractAjTransportInvoiceRecords, extractGardunosInvoiceRecords, extractEagleInvoiceRecords, transcribeVoiceNote };

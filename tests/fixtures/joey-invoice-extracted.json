@@ -1,0 +1,569 @@
+{
+ "records": [
+  {
+   "contract_no": "26JY41",
+   "bl_no": "GLTOEH-25980",
+   "container_no": "TCKU7036876",
+   "mt": 18.452,
+   "comm_per_mt": 10.0,
+   "commission": 184.52,
+   "buyer": "Shinyoung Nonferrous Metals Co., Ltd."
+  },
+  {
+   "contract_no": "26JY48",
+   "bl_no": "GLTOEH-26202",
+   "container_no": "TGBU6479149",
+   "mt": 23.587,
+   "comm_per_mt": 10.0,
+   "commission": 235.87,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY49",
+   "bl_no": "GLTOEH-26366",
+   "container_no": "HMMU4059389",
+   "mt": 18.307,
+   "comm_per_mt": 10.0,
+   "commission": 183.07,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY50",
+   "bl_no": "GLTOEH-26366",
+   "container_no": "HMMU6739045",
+   "mt": 24.077,
+   "comm_per_mt": 10.0,
+   "commission": 240.77,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY51",
+   "bl_no": "GLTOEH-26456",
+   "container_no": "KOCU5148281",
+   "mt": 6.432,
+   "comm_per_mt": 5.0,
+   "commission": 32.16,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY51",
+   "bl_no": "GLTOEH-26456",
+   "container_no": "KOCU5148281",
+   "mt": 17.427,
+   "comm_per_mt": 5.0,
+   "commission": 87.14,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY52",
+   "bl_no": "GLTOEH-26725",
+   "container_no": "KOCU4653709",
+   "mt": 6.55,
+   "comm_per_mt": 5.0,
+   "commission": 32.75,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY52",
+   "bl_no": "GLTOEH-26725",
+   "container_no": "KOCU4653709",
+   "mt": 17.01,
+   "comm_per_mt": 5.0,
+   "commission": 85.05,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY53",
+   "bl_no": "GLTOEH-26546",
+   "container_no": "KOCU5017229",
+   "mt": 23.133,
+   "comm_per_mt": 10.0,
+   "commission": 231.33,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY54",
+   "bl_no": "GLTOEH-26566",
+   "container_no": "KOCU4101335",
+   "mt": 22.626,
+   "comm_per_mt": 10.0,
+   "commission": 226.26,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY55",
+   "bl_no": "GLTOEH-26569",
+   "container_no": "HMMU6535695",
+   "mt": 23.133,
+   "comm_per_mt": 10.0,
+   "commission": 231.33,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY56",
+   "bl_no": "GLTOEH-26431",
+   "container_no": "KOCU4103359",
+   "mt": 21.618,
+   "comm_per_mt": 5.0,
+   "commission": 108.09,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY57",
+   "bl_no": "GLTOEH-26672",
+   "container_no": "CLKU5009770",
+   "mt": 23.133,
+   "comm_per_mt": 5.0,
+   "commission": 115.67,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY58",
+   "bl_no": "GLTOEH-26674",
+   "container_no": "HMMU6917105",
+   "mt": 20.775,
+   "comm_per_mt": 5.0,
+   "commission": 103.88,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY59",
+   "bl_no": "GLTOEH-26766",
+   "container_no": "SEGU6013365",
+   "mt": 21.401,
+   "comm_per_mt": 5.0,
+   "commission": 107.01,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY60",
+   "bl_no": "GLTOEH-26961",
+   "container_no": "HMMU6776080",
+   "mt": 2.0,
+   "comm_per_mt": 5.0,
+   "commission": 10.0,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY60",
+   "bl_no": "GLTOEH-26961",
+   "container_no": "HMMU6776080",
+   "mt": 16.924,
+   "comm_per_mt": 5.0,
+   "commission": 84.62,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY61",
+   "bl_no": "GLTOEH-26753",
+   "container_no": "HMMU6566042",
+   "mt": 4.199,
+   "comm_per_mt": 5.0,
+   "commission": 21.0,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY61",
+   "bl_no": "GLTOEH-26753",
+   "container_no": "HMMU6566042",
+   "mt": 19.451,
+   "comm_per_mt": 5.0,
+   "commission": 97.26,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY62",
+   "bl_no": "GLTOEH-27104",
+   "container_no": "KOCU4835771",
+   "mt": 17.309,
+   "comm_per_mt": 5.0,
+   "commission": 86.55,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY62",
+   "bl_no": "GLTOEH-27104",
+   "container_no": "KOCU4835771",
+   "mt": 5.425,
+   "comm_per_mt": 5.0,
+   "commission": 27.13,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY63",
+   "bl_no": "GLTOEH-26691",
+   "container_no": "HMMU7010335",
+   "mt": 18.425,
+   "comm_per_mt": 5.0,
+   "commission": 92.13,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY64",
+   "bl_no": "GLTOEH-26834",
+   "container_no": "HMMU7027087",
+   "mt": 23.723,
+   "comm_per_mt": 5.0,
+   "commission": 118.62,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY65",
+   "bl_no": "GLTOEH-26884",
+   "container_no": "KOCU4906915",
+   "mt": 23.904,
+   "comm_per_mt": 5.0,
+   "commission": 119.52,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY66",
+   "bl_no": "GLTOEH-26928",
+   "container_no": "HMMU4482528",
+   "mt": 23.133,
+   "comm_per_mt": 5.0,
+   "commission": 115.67,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY67",
+   "bl_no": "GLTOEH-26688",
+   "container_no": "HMMU6798990",
+   "mt": 20.911,
+   "comm_per_mt": 5.0,
+   "commission": 104.56,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY68",
+   "bl_no": "GLTOEH-27033",
+   "container_no": "HMMU7064584",
+   "mt": 22.77,
+   "comm_per_mt": 5.0,
+   "commission": 113.85,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY69",
+   "bl_no": "GLTOEH-26673",
+   "container_no": "TCNU2568485",
+   "mt": 6.771,
+   "comm_per_mt": 5.0,
+   "commission": 33.86,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY69",
+   "bl_no": "GLTOEH-26673",
+   "container_no": "TCNU2568485",
+   "mt": 11.423,
+   "comm_per_mt": 5.0,
+   "commission": 57.12,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY70",
+   "bl_no": "GLTOEH-27495",
+   "container_no": "KOCU4812138",
+   "mt": 21.428,
+   "comm_per_mt": 5.0,
+   "commission": 107.14,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY71",
+   "bl_no": "GLTOEH-27374",
+   "container_no": "KOCU4377690",
+   "mt": 18.443,
+   "comm_per_mt": 5.0,
+   "commission": 92.22,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY72",
+   "bl_no": "GLTOEH-27169",
+   "container_no": "KOCU5162546",
+   "mt": 22.795,
+   "comm_per_mt": 5.0,
+   "commission": 113.98,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY73",
+   "bl_no": "GLTOEH-27149",
+   "container_no": "MSKU0601389",
+   "mt": 20.775,
+   "comm_per_mt": 5.0,
+   "commission": 103.88,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY74",
+   "bl_no": "GLTOEH-27233",
+   "container_no": "TLLU4003703",
+   "mt": 21.863,
+   "comm_per_mt": 5.0,
+   "commission": 109.32,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY75",
+   "bl_no": "GLTOEH-27320",
+   "container_no": "KOCU4594653",
+   "mt": 23.587,
+   "comm_per_mt": 5.0,
+   "commission": 117.94,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY76",
+   "bl_no": "GLTOEH-27461",
+   "container_no": "KOCU4954148",
+   "mt": 23.133,
+   "comm_per_mt": 5.0,
+   "commission": 115.67,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY77",
+   "bl_no": "GLTOEH-27659",
+   "container_no": "HMMU4664780",
+   "mt": 21.591,
+   "comm_per_mt": 5.0,
+   "commission": 107.96,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY78",
+   "bl_no": "GLTOEH-27375",
+   "container_no": "TXGU8942580",
+   "mt": 2.0,
+   "comm_per_mt": 5.0,
+   "commission": 10.0,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY78",
+   "bl_no": "GLTOEH-27375",
+   "container_no": "TXGU8942580",
+   "mt": 21.587,
+   "comm_per_mt": 5.0,
+   "commission": 107.94,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY79",
+   "bl_no": "GLTOEH-27671",
+   "container_no": "HMMU4705278",
+   "mt": 2.2,
+   "comm_per_mt": 5.0,
+   "commission": 11.0,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY79",
+   "bl_no": "GLTOEH-27671",
+   "container_no": "HMMU4705278",
+   "mt": 20.933,
+   "comm_per_mt": 5.0,
+   "commission": 104.67,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY81",
+   "bl_no": "GLTOEH-27365",
+   "container_no": "HMMU4379850",
+   "mt": 23.886,
+   "comm_per_mt": 30.0,
+   "commission": 716.58,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  },
+  {
+   "contract_no": "26JY82",
+   "bl_no": "GLTOEH-28445",
+   "container_no": "HMMU6872607",
+   "mt": 24.893,
+   "comm_per_mt": 30.0,
+   "commission": 746.79,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  },
+  {
+   "contract_no": "26JY83",
+   "bl_no": "GLTOEH-27580",
+   "container_no": "HMMU6932497",
+   "mt": 23.587,
+   "comm_per_mt": 10.0,
+   "commission": 235.87,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY84",
+   "bl_no": "GLTOEH-27591",
+   "container_no": "CAIU7297607",
+   "mt": 23.351,
+   "comm_per_mt": 10.0,
+   "commission": 233.51,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY85",
+   "bl_no": "GLTOEH-27688",
+   "container_no": "KOCU4877967",
+   "mt": 22.68,
+   "comm_per_mt": 10.0,
+   "commission": 226.8,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY86",
+   "bl_no": "GLTOEH-27851",
+   "container_no": "HMMU6027400",
+   "mt": 23.587,
+   "comm_per_mt": 5.0,
+   "commission": 117.94,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY87",
+   "bl_no": "GLTOEH-27867",
+   "container_no": "HMMU6298470",
+   "mt": 23.433,
+   "comm_per_mt": 5.0,
+   "commission": 117.17,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY90",
+   "bl_no": "GLTOEH-28135",
+   "container_no": "TXGU8942928",
+   "mt": 19.84,
+   "comm_per_mt": 30.0,
+   "commission": 595.2,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  },
+  {
+   "contract_no": "26JY91",
+   "bl_no": "GLTOEH-28135",
+   "container_no": "KOCU4947750",
+   "mt": 22.371,
+   "comm_per_mt": 30.0,
+   "commission": 671.13,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  },
+  {
+   "contract_no": "26JY92",
+   "bl_no": "GLTOEH-28333",
+   "container_no": "HMMU7118232",
+   "mt": 23.714,
+   "comm_per_mt": 30.0,
+   "commission": 711.42,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  },
+  {
+   "contract_no": "26JY93",
+   "bl_no": "GLTOEH-28333",
+   "container_no": "TCNU5059310",
+   "mt": 22.435,
+   "comm_per_mt": 30.0,
+   "commission": 673.05,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  },
+  {
+   "contract_no": "26JY94",
+   "bl_no": "GLTOEH-28333",
+   "container_no": "HMMU4929318",
+   "mt": 18.008,
+   "comm_per_mt": 30.0,
+   "commission": 540.24,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  },
+  {
+   "contract_no": "26JY95",
+   "bl_no": "GLTOEH-27741",
+   "container_no": "HMMU7060866",
+   "mt": 23.133,
+   "comm_per_mt": 10.0,
+   "commission": 231.33,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY96",
+   "bl_no": "GLTOEH-27954",
+   "container_no": "KOCU5139886",
+   "mt": 23.469,
+   "comm_per_mt": 10.0,
+   "commission": 234.69,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY97",
+   "bl_no": "GLTOEH-27954",
+   "container_no": "HMMU6904319",
+   "mt": 23.678,
+   "comm_per_mt": 5.0,
+   "commission": 118.39,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY98",
+   "bl_no": "GLTOEH-28096",
+   "container_no": "KOCU4366930",
+   "mt": 23.904,
+   "comm_per_mt": 10.0,
+   "commission": 239.04,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY99",
+   "bl_no": "GLTOEH-28470",
+   "container_no": "GAOU6226932",
+   "mt": 22.979,
+   "comm_per_mt": 10.0,
+   "commission": 229.79,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY100",
+   "bl_no": "GLTOEH-28534",
+   "container_no": "HMMU4168836",
+   "mt": 24.04,
+   "comm_per_mt": 10.0,
+   "commission": 240.4,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY101",
+   "bl_no": "GLTOEH-28066",
+   "container_no": "CAIU7405281",
+   "mt": 21.954,
+   "comm_per_mt": 5.0,
+   "commission": 109.77,
+   "buyer": "TAEWON AUTOMOTIVE CO., LTD."
+  },
+  {
+   "contract_no": "26JY102",
+   "bl_no": "GLTOEH-28137",
+   "container_no": "HDMU4953511",
+   "mt": 12.855,
+   "comm_per_mt": 10.0,
+   "commission": 128.55,
+   "buyer": "Jemulpo Metal Co., Ltd"
+  },
+  {
+   "contract_no": "26JY103",
+   "bl_no": "GLTOEH-28082",
+   "container_no": "MSKU1629380",
+   "mt": 22.108,
+   "comm_per_mt": 20.0,
+   "commission": 442.16,
+   "buyer": "DAEKWANG SANUP. Co., Ltd."
+  }
+ ],
+ "claims": [
+  {
+   "contract_no": "26JY52",
+   "label": "Deduct Claim",
+   "amount": -200.0
+  }
+ ]
+}

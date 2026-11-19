@@ -151,6 +151,59 @@ module.exports = function (app, ctx) {
         }
     });
 
+    // Joey (Hynos) commission invoice — same shape as Pan Metal above, but keyed by
+    // container, with optional Commission List (xlsx) as a second opinion. 2026-11-20.
+    app.post('/api/verify/joey', largeJson, async (req, res) => {
+        try {
+            const { pdfs = [], list = null } = req.body || {};
+            if (!Array.isArray(pdfs) || !pdfs.length) return res.status(400).json({ error: 'No invoice PDF provided.' });
+            const J = require('./helpers/joeyCommission');
+            const { extractJoeyCommissionInvoice } = require('./helpers/gemini');
+            const invoiceSheet = require('./helpers/invoiceSheet');
+
+            const per = await Promise.all(pdfs.map(async (pdf) => {
+                try {
+                    const ex = await extractJoeyCommissionInvoice(pdf.base64);
+                    return { name: pdf.name || 'unnamed.pdf', ex, recs: J.flatten(ex, pdf.name || 'unnamed.pdf') };
+                } catch (e) {
+                    console.error(`[verify/joey] extraction failed for ${pdf.name || 'unnamed.pdf'}:`, e.message);
+                    return { name: pdf.name || 'unnamed.pdf', ex: null, recs: [{ container_no: null, commission: null, extraction_failed: true,
+                        description: `Extraction failed: ${e.message}`, source_file: pdf.name || 'unnamed.pdf' }] };
+                }
+            }));
+            const records = per.flatMap((p) => p.recs);
+
+            let parsedList = null, listError = null;
+            if (list && list.base64) {
+                try { parsedList = await J.parseCommissionList(Buffer.from(list.base64, 'base64')); }
+                catch (e) { listError = e.message; }
+            }
+            const { headers, rows } = await invoiceSheet.fetchRawSheet(true);
+            const result = J.crossCheck(records.filter((r) => !r.extraction_failed), { headers, rows, invoiceSheet, list: parsedList });
+            for (const r of records.filter((x) => x.extraction_failed)) result.matched.push({ ...r, status: 'extraction_failed' });
+
+            // His stated grand total against his own lines, and against his list.
+            const stated = per.map((p) => Number(p.ex && p.ex.total)).filter((n) => Number.isFinite(n) && n > 0);
+            result.invoice = per.map((p) => ({ file: p.name, invoice_no: p.ex && p.ex.invoice_no, date: p.ex && p.ex.invoice_date, stated_total: p.ex && p.ex.total }));
+            if (stated.length === 1) result.totals.stated = stated[0];
+            if (result.totals.stated != null) result.totals.total_diff = Math.round((result.totals.stated - result.totals.net) * 100) / 100;
+            if (parsedList) {
+                result.list = { tab: parsedList.tab, lines: parsedList.lines.length, claims: parsedList.claims,
+                    sum: Math.round((parsedList.lines.reduce((t, l) => t + (l.commission || 0), 0) + parsedList.claims.reduce((t, c) => t + (c.amount || 0), 0)) * 100) / 100,
+                    not_invoiced: parsedList.lines.filter((l) => !records.some((r) => String(r.container_no || '').toUpperCase() === String(l.container_no).toUpperCase()
+                        && Math.abs((Number(r.mt) || 0) - (l.mt || 0)) <= J.WEIGHT_TOLERANCE)) };
+            }
+            if (listError) result.list_error = listError;
+
+            try { result.sheet_log = await require('./helpers/joeySheetLog').logJoeyVerification(result.matched); }
+            catch (e) { console.error('[verify/joey] sheet logging failed:', e.message); result.sheet_log = { logged: 0, error: e.message }; }
+            res.json(result);
+        } catch (e) {
+            console.error('[verify/joey] failed:', e.message);
+            res.status(500).json({ error: e.message });
+        }
+    });
+
     app.post('/api/verify/jio', largeJson, async (req, res) => {
         try {
             const { pdfs = [] } = req.body || {};
