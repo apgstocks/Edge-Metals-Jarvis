@@ -240,15 +240,16 @@ async function askYardInner(question, opts = {}) {
             // ERD" depends on entirely, so it now sits directly against the
             // question it modifies. A one-line move with real evidence
             // behind it.
-            historyText,
-            '',
-            // A file she attached (2026-11-20): its table, numbered rows, and the three tools that use it.
+            // A file she attached (2026-11-20): its table, numbered rows, and the three tools that use it. BEFORE the
+            // history, which has to stay right next to the question (tests/voice-memory.js F, "Lost in the Middle").
             opts.attachment ? '\n' + require('./scoutAttachments').forPrompt(opts.attachment) + '\n' + require('./tools').describeTools({ attachmentsOnly: true })
                 + '\nWITH A FILE: to record from it, use record_sales_from_attachment or record_purchases_from_attachment in `action`, '
                 + 'naming the COLUMNS (by their names above) — never type weights or rows yourself; the tool reads them from the file. '
                 + 'If several columns are tare (e.g. container tare plus chassis), pass the column with the TOTAL tare if there is one. '
                 + 'ASK for the price (and its unit) and for the buyer or seller if she did not give them. '
                 + 'To answer a question about the file, read the rows above (or read_attachment_rows for more).' : null,
+            historyText,
+            '',
             `QUESTION: ${asked}`,
             '',
             'Reply as JSON: {"answer": "...", "have_data": true|false, '

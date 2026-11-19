@@ -103,6 +103,12 @@
     '#yardBotInput:focus{border-color:#B4703A;}',
     '#yardBotSend{background:#B4703A;border:none;color:#fff;border-radius:9px;padding:0 16px;font-size:13px;font-weight:700;cursor:pointer;}',
     '#yardBotSend:disabled{opacity:.5;cursor:default;}',
+    // the attach button and the "file attached" strip (website only, 2026-11-20)
+    '#yardBotAttach{background:#0F1214;border:1px solid rgba(255,255,255,.16);color:#ddd;border-radius:9px;padding:0 10px;font-size:15px;cursor:pointer;}',
+    '#yardBotAttach:disabled{opacity:.5;cursor:default;}',
+    '#yardBotAttached{display:none;align-items:center;gap:8px;padding:7px 12px;border-top:1px solid rgba(255,255,255,.1);background:#15191C;font-size:12px;color:#ddd;}',
+    '#yardBotAttached b{font-weight:600;}#yardBotAttached span{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+    '#yardBotDetach{background:none;border:none;color:#aaa;font-size:16px;cursor:pointer;padding:0 4px;}',
     /* On a phone the panel takes the screen — a 380px card floating on a
        small display wastes most of it and puts the input under the thumb of
        whatever is behind it. */
@@ -243,6 +249,7 @@
     el('yardBotFab').addEventListener('click', function () { toggle(); });
     el('yardBotClose').addEventListener('click', function () { toggle(); });
     el('yardBotSend').addEventListener('click', send);
+    mountAttach();
     el('yardBotInput').addEventListener('keydown', function (e) {
       if (e.key === 'Enter') { e.preventDefault(); send(); }
     });
@@ -483,6 +490,66 @@
     });
   }
 
+  // ── ATTACHMENTS (website only, 2026-11-20) ─────────────────────────────
+  // Apsara: "Add an option for attachments in scout" — Excel, CSV, PDF or a photo, to record sales, record
+  // purchases, or ask about. The file goes to /api/yard/attach, which reads it and keeps it for two hours; every
+  // question after that carries its id until it is removed with the ×. The app's panel has no button: the
+  // server only does any of this when the website asks (attachments_ok), so the app is untouched.
+  var attached = null;                     // { id, name, rows, columns, read_by }
+  function onWebsite() { return !document.getElementById('appShell'); }
+  function paintAttached() {
+    var bar = el('yardBotAttached');
+    if (!bar) return;
+    if (!attached) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+    bar.style.display = 'flex';
+    bar.innerHTML = '<span>&#128206; <b></b> &middot; <i></i></span><button id="yardBotDetach" title="Remove the file">&times;</button>';
+    bar.querySelector('b').textContent = attached.name;
+    bar.querySelector('i').textContent = attached.rows ? attached.rows + ' row' + (attached.rows === 1 ? '' : 's') : 'text only';
+    el('yardBotDetach').addEventListener('click', function () { attached = null; paintAttached(); });
+  }
+  function mountAttach() {
+    if (!onWebsite() || el('yardBotAttach')) return;
+    var foot = el('yardBotFoot');
+    var btn = document.createElement('button');
+    btn.id = 'yardBotAttach'; btn.type = 'button'; btn.title = 'Attach a file (Excel, CSV, PDF or photo)'; btn.innerHTML = '&#128206;';
+    var file = document.createElement('input');
+    file.type = 'file'; file.id = 'yardBotFile'; file.hidden = true;
+    file.accept = '.xlsx,.csv,.tsv,.txt,.pdf,image/*';
+    foot.insertBefore(file, foot.firstChild);
+    foot.insertBefore(btn, el('yardBotInput'));
+    var bar = document.createElement('div'); bar.id = 'yardBotAttached';
+    foot.parentNode.insertBefore(bar, foot);
+    btn.addEventListener('click', function () { if (!busy) file.click(); });
+    file.addEventListener('change', function () {
+      var f = file.files && file.files[0];
+      file.value = '';
+      if (!f) return;
+      if (f.size > 12 * 1024 * 1024) { add('bot', 'That file is over 12 MB. Send a smaller one.'); return; }
+      var note = add('bot', 'Reading ' + f.name + '…');
+      busy = true; btn.disabled = true; el('yardBotSend').disabled = true;
+      var reader = new FileReader();
+      reader.onload = function () {
+        var data = String(reader.result || '').replace(/^data:[^,]*,/, '');
+        callApi('/api/yard/attach', { name: f.name, mime: f.type || '', data: data })
+          .then(function (r) {
+            if (!r || !r.ok || !r.attachment) throw new Error((r && r.error) || 'the file could not be read');
+            var a = r.attachment;
+            attached = { id: a.id, name: a.name, rows: a.rows, columns: a.columns, read_by: a.read_by };
+            paintAttached();
+            note.textContent = a.rows
+              ? 'I have read ' + a.name + ': ' + a.rows + ' row' + (a.rows === 1 ? '' : 's') + (a.columns && a.columns.length ? ' (' + a.columns.slice(0, 8).join(', ') + (a.columns.length > 8 ? ', …' : '') + ')' : '') + '.'
+                + (a.read_by === 'model' ? ' It was read from a PDF or photo, so check the numbers.' : '')
+                + '\n\nShould I record these as sales, record them as purchases, or answer a question about them?'
+              : 'I have read ' + a.name + '. There is no table in it, but you can ask me about what it says.';
+          })
+          .catch(function (e) { note.textContent = 'I could not read that file: ' + ((e && e.message) || 'unknown error') + '.'; })
+          .then(function () { busy = false; btn.disabled = false; el('yardBotSend').disabled = false; });
+      };
+      reader.onerror = function () { note.textContent = 'I could not open that file on this computer.'; busy = false; btn.disabled = false; el('yardBotSend').disabled = false; };
+      reader.readAsDataURL(f);
+    });
+  }
+
   function send() {
     if (busy) return;
     // Belt and braces: the gate hides the button, but a stale open panel must
@@ -524,11 +591,16 @@
       // two different businesses on a guess. Edge Yard and Edge Metals are
       // different companies and that separation is most of what this is for.
       company: (onWeb && typeof spendCompany === 'string') ? spendCompany : undefined,
+      // a file attached in this panel, and permission to turn a pasted table into one (website only)
+      attachment_id: (onWeb && attached) ? attached.id : undefined,
+      attachments_ok: onWeb || undefined,
     })
       .then(function (r) {
         var answer = (r && r.answer) || "I couldn't answer that.";
         thinking.textContent = answer;
         history.push({ role: 'bot', text: answer });
+        if (r && r.attachment) { attached = { id: r.attachment.id, name: r.attachment.name, rows: r.attachment.rows, columns: r.attachment.columns, read_by: r.attachment.read_by }; paintAttached(); }
+        if (r && r.attachment_expired) { attached = null; paintAttached(); }
         if (r && r.proposal) renderProposal(r.proposal);
         if (r && r.used) renderWorking(r.used);
         if (r && r.follow_ups && !r.proposal) renderFollowUps(r.follow_ups);

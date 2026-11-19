@@ -287,10 +287,16 @@ section('F — nothing new can write');
     // Scout automatically"; asked how far, she chose "Scout finds, you confirm". Always a confirm card, admin only,
     // names only, with Undo. tests/scout-item-variants.js.
     //
+    // record_sales_from_attachment and record_purchases_from_attachment JOIN, DELIBERATELY (2026-11-20). Apsara pasted
+    // 18 Metalco containers and Scout could not record them; then "Add an option for attachments in scout", for sales
+    // and purchases. One record per row, weights read from the file by code, a card listing every row, containers
+    // already on a sale skipped. Both need an attachment, so nothing reaches them without a file.
+    // tests/scout-attachments.js.
+    //
     // Anything else arriving in this list is NOT declared and should be
     // argued about before the pin is widened again.
     ck('  and the write list is unchanged',
-       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense', 'record_outbound_sale', 'merge_item_names'].sort().join(','),
+       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense', 'record_outbound_sale', 'merge_item_names', 'record_sales_from_attachment', 'record_purchases_from_attachment'].sort().join(','),
        writes.join(', '));
 }
 

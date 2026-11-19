@@ -137,8 +137,10 @@ ck('net total is right', /data-label="Net">7,305</.test(web));
   // The new invariant is narrower and stronger than "read-only": the widget
   // may ask, and may confirm a proposal the SERVER made, and nothing else.
   const posts = (a.match(/\/api\/[a-z0-9\/-]+/g) || []);
-  const ALLOWED = ['/api/yard/ask', '/api/yard/act', '/api/yard/cancel-action'];
-  ck('the widget calls only the three yard endpoints',
+  // /api/yard/attach JOINS, DELIBERATELY (2026-11-20): Apsara, "Add an option for attachments in scout". It only
+  // READS a file and keeps it for two hours; it writes nothing. Writing from a file still goes ask -> card -> act.
+  const ALLOWED = ['/api/yard/ask', '/api/yard/act', '/api/yard/cancel-action', '/api/yard/attach'];
+  ck('the widget calls only the four yard endpoints',
      posts.every(u => ALLOWED.includes(u)));
   ck('the widget never touches the action-taking bot route', !/bot\/command/.test(a));
   // The heart of it. If the confirm call ever carries an amount, a load id or

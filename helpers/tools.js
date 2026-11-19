@@ -1420,7 +1420,7 @@ TOOLS.read_attachment_rows = {
 TOOLS.record_sales_from_attachment = {
     kind: 'write',
     needsAttachment: true,
-    description: 'Record SALES from an attached file: one sale per row (e.g. one per container), weights read from the file. Name the columns; never type weights yourself.',
+    description: 'Record SALES from an attached file: one sale per row (one per shipped lot), weights read from the file. Name the columns; never type weights yourself.',
     params: {
         attachment_id: { type: 'string', required: true, describe: 'the attachment_id shown with the ATTACHED FILE' },
         buyer: { type: 'string', describe: 'who bought it — ASK if not given (or use buyer_column)' },

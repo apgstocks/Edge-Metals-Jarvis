@@ -57,7 +57,14 @@ console.log('\n─ the tool registry ──────────────�
 
 section('A — the prompt and the code are ONE list');
 {
-    const text = tools.describeTools();
+    // 2026-11-20: the three file tools are described only when a file is attached (describeTools({attachmentsOnly})),
+    // so "every tool is described" means: in the everyday prompt OR in the file prompt — and each in exactly one.
+    const everyday = tools.describeTools(), withFile = tools.describeTools({ attachmentsOnly: true });
+    const text = everyday + '\n' + withFile;
+    const fileTools = tools.TOOL_NAMES.filter((n) => tools.TOOLS[n].needsAttachment);
+    ck('the file tools are described only with a file attached', fileTools.length === 3
+       && fileTools.every((n) => withFile.includes(`• ${n} —`) && !everyday.includes(`• ${n} —`))
+       && !tools.TOOL_NAMES.filter((n) => !tools.TOOLS[n].needsAttachment).some((n) => withFile.includes(`• ${n} —`)), fileTools.join(','));
     // THE POINT OF THE WHOLE CHANGE. Every tool that exists is described, and
     // nothing is described that does not exist.
     for (const name of tools.TOOL_NAMES) {
