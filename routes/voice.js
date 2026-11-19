@@ -26,12 +26,34 @@ module.exports = function (app, ctx) {
             const scoutActions = require('./helpers/scoutActions');
             const wantShow = b.show === true || b.want_show === true;
 
-            const out = await askYard(b.question, {
+            // ── A FILE, OR A PASTED TABLE (2026-11-20) ─────────────────────────────────────────────────────
+            // Apsara pasted 18 containers and Scout answered on the first 500 characters. `attachments_ok` is sent
+            // by the website's panel only (the flag marks the NEW behaviour): then a long paste that is a table is
+            // stored as an attachment and the question becomes the words around it. Every other caller is unchanged.
+            const att = require('./helpers/scoutAttachments');
+            let attachment = b.attachment_id ? att.get(b.attachment_id) : null;
+            let question = b.question;
+            let pastedSummary = null;
+            if (b.attachments_ok === true && !attachment && typeof question === 'string' && question.length > 400) {
+                const pasted = att.fromPastedText(question);
+                if (pasted) {
+                    attachment = att.save({ name: 'pasted table', kind: 'paste', table: pasted.table, role: req.role });
+                    pastedSummary = att.summary(attachment);
+                    question = pasted.words || 'I pasted a table. What is in it?';
+                }
+            }
+            if (b.attachment_id && !attachment) {
+                return res.json({ ok: false, answer: 'That attachment has expired (they last two hours). Attach the file again.', attachment_expired: true });
+            }
+
+            const out = await askYard(question, {
                 history: b.history, days: b.days, role: req.role,
                 show: wantShow ? scoutActions.promptFor() : null,
                 // Opt-in, like `show`: only the Scout panel asks to be led. Everyone else is unchanged.
                 lead: b.lead === true,
+                attachment,
             });
+            if (pastedSummary) out.attachment = pastedSummary;
 
             if (wantShow) {
                 // The model resolved what she meant; this checks it before
@@ -1655,6 +1677,23 @@ module.exports = function (app, ctx) {
     // asking could do by hand — and an admin-only gate here would instead make
     // it do LESS, giving a signed-in user a Pay button that works and an
     // assistant that refuses, which reads as broken rather than as secure.
+    // ── ATTACH A FILE TO SCOUT (2026-11-20, website) ─────────────────────────────────────────────────────
+    // Body: { name, mime, data: base64 }. Excel and CSV are read by code; PDF and photos by the model (marked so).
+    // Answers what was read, so the panel can show "18 rows · columns …" before anyone asks anything.
+    app.post('/api/yard/attach', async (req, res) => {
+        try {
+            const b = req.body || {};
+            const att = require('./helpers/scoutAttachments');
+            const buffer = Buffer.from(String(b.data || ''), 'base64');
+            const parsed = await att.parseFile({ name: b.name, mime: b.mime, buffer });
+            if (!parsed.table && !parsed.text) return res.status(400).json({ ok: false, error: `I could not find a table or any text in ${b.name || 'that file'}.` });
+            const saved = att.save({ name: b.name, kind: parsed.kind, table: parsed.table, text: parsed.text, sheet: parsed.sheet, otherSheets: parsed.otherSheets, role: req.role });
+            res.json({ ok: true, attachment: att.summary(saved) });
+        } catch (e) {
+            res.status(400).json({ ok: false, error: e.message });
+        }
+    });
+
     app.post('/api/yard/act', async (req, res) => {
         try {
             const { confirmAction } = require('./helpers/yardActions');
