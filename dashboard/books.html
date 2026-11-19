@@ -267,6 +267,45 @@ tr.tot td{border-top:1px solid var(--border-default);font-weight:700;color:var(-
   .srow .nm,td{color:#222}
   .trust{break-inside:avoid}
 }
+
+/* ── SIMPLER, LIKE A QUICKBOOKS REPORT — 2026-11-19 ──────────────────────
+   Apsara, shown QuickBooks' Sales by Customer Summary: "Make our books look
+   like that. Better than it", and, asked light or dark: "Keep dark, just
+   simplify". CSS ONLY, this page only: no markup or script changed, so no
+   figure can move. What it does:
+     - the report is ONE centred document, not a full-width grid of boxes;
+     - rows are plain: no proportion bars, no gradient bands, no code chips;
+     - the answer stays first, but quieter (one line of figures, not 4 tiles);
+     - totals are weight and a rule, as on a printed statement;
+     - keeps what QuickBooks lacks: the trust banner and click-through codes. */
+.wrap{max-width:880px}
+.bar{padding:10px 0;border-bottom:1px solid var(--border-default);margin-bottom:22px}
+.kpis{grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--border-subtle);border-radius:6px;background:var(--surface-card);margin-bottom:22px}
+.kpi{border:0;border-radius:0;background:none;padding:14px 18px;border-left:1px solid var(--border-subtle)}
+.kpi:first-child{border-left:0}
+.kpi.lead{background:none}
+.kpi .v,.kpi.lead .v{font-size:22px;letter-spacing:-.02em}
+.kpi.lead .v{font-size:26px}
+.tabs{margin-bottom:22px}
+.card{border:0;background:none;border-radius:0;overflow:visible;margin-bottom:26px}
+.card .hdr{background:none;border:0;padding:6px 0 14px;text-align:center}
+.card .hdr h3{font-size:19px;font-weight:800}
+.card .hdr .sub{font-size:12px;margin-top:3px}
+.srow{grid-template-columns:1fr 130px;padding:7px 8px 7px 22px;border-top:0;border-bottom:1px solid var(--border-subtle)}
+.srow .prop{display:none}
+.srow .cd{background:none;border:0;padding:0 0 0 8px;font-size:10.5px;color:var(--text-faint)}
+.shead{background:none;border-top:0;padding:16px 8px 6px 8px;border-bottom:1px solid var(--border-default)}
+.shead .t{font-family:var(--font-sans);font-size:13px;letter-spacing:0;text-transform:none;font-weight:700;color:var(--text-strong)}
+.band,.band.final{background:none;border-top:1px solid var(--text-faint);padding:10px 8px}
+.band .t{font-family:var(--font-sans);font-size:14px;font-weight:700}
+.band .n,.band.final .n{font-family:var(--font-mono);font-size:15px;font-weight:700}
+.band.final{border-top:2px solid var(--text-body);border-bottom:2px double var(--text-body)}
+.band.final .n{font-size:17px}
+.two{gap:28px}
+table th{background:none;border-bottom:1px solid var(--border-default)}
+tr.tot td{background:none;border-top:1px solid var(--text-faint)}
+.trust{border-radius:4px}
+@media (max-width:700px){.kpis{grid-template-columns:1fr 1fr}.kpi:nth-child(3){border-left:0}}
 </style>
 </head>
 <body>
