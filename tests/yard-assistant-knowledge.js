@@ -293,10 +293,15 @@ section('F — nothing new can write');
     // already on a sale skipped. Both need an attachment, so nothing reaches them without a file.
     // tests/scout-attachments.js.
     //
+    // record_sale JOINS, DELIBERATELY (2026-11-21). Apsara pasted one Metalco container ("HMS 81500 31060 … 50,440")
+    // and asked to "create a sale"; the only sale tool was record_outbound_sale, which sells ALL stock, and it recorded
+    // 111,069 lb. One sale with her own weights, a confirm card showing gross − tare = net, a container already on a
+    // sale refused. tests/scout-record-sale.js.
+    //
     // Anything else arriving in this list is NOT declared and should be
     // argued about before the pin is widened again.
     ck('  and the write list is unchanged',
-       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense', 'record_outbound_sale', 'merge_item_names', 'record_sales_from_attachment', 'record_purchases_from_attachment'].sort().join(','),
+       writes.sort().join(',') === ['record_payment', 'record_prepayment', 'add_trucker_bill', 'add_expense', 'record_outbound_sale', 'record_sale', 'merge_item_names', 'record_sales_from_attachment', 'record_purchases_from_attachment'].sort().join(','),
        writes.join(', '));
 }
 

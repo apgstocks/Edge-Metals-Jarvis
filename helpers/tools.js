@@ -1365,7 +1365,11 @@ function describeTools({ attachmentsOnly = false } = {}) {
 // known per item; a shared lot's weight is never counted twice.
 TOOLS.record_outbound_sale = {
     kind: 'write',
-    description: 'Record an outbound sale of ALL the stock on hand of named items (optionally only lots received before a date). Not for part-quantities.',
+    // ── NEVER WHEN A WEIGHT IS GIVEN (2026-11-21) ─────────────────────────
+    // Apsara pasted one container — "HMS 81500 31060 … 50,440 for Metalco" — and asked to "create a sale". This was
+    // the only sale tool the assistant had, so it sold ALL the HMS on hand, 111,069 lb, as OUT_38. record_sale now
+    // exists for one sale with her weights; this one says, in the description and on the card, that it is EVERYTHING.
+    description: 'Sell ALL the stock on hand of named items as a single sale (optionally only lots received before a date). ONLY when she says she sold all / everything of an item and gives NO weight. If ANY weight or a single load / lot is mentioned, use record_sale instead — never this.',
     params: {
         buyer: { type: 'string', required: true, describe: 'who the yard sold to' },
         date: { type: 'date', required: true, describe: 'the sale date as YYYY-MM-DD — ASK, do not assume today' },
@@ -1448,6 +1452,7 @@ TOOLS.record_outbound_sale = {
         const totalWeight = lines.reduce((a, l) => a + l.weight, 0);
         const amount = Math.round(totalWeight * price * 100) / 100;
         const details = [
+            ['This sells', `EVERYTHING on hand of ${lines.map((l) => l.description).join(', ')} — ${Math.round(totalWeight).toLocaleString()} lb`],
             ['Buyer', buyer],
             ['Sale date', p.date],
             ...(cutoff ? [['From lots received', `before ${cutoff}`]] : []),
@@ -1456,11 +1461,13 @@ TOOLS.record_outbound_sale = {
             ['Price', `${perLb(price)} per lb${quotedText ? ' (worked out from the quote)' : ''}`],
             ['Sale total', money(amount)],
         ];
-        const warnings = [quotedText ? 'Stored per lb, divided from the quoted price. On-hand drops by exactly these weights.' : 'Priced per lb. On-hand drops by exactly these weights.'];
+        const warnings = [
+            `This sells ALL ${Math.round(totalWeight).toLocaleString()} lb on hand${cutoff ? ` from lots received before ${cutoff}` : ''}. If you meant one load or container, cancel and give me its weights.`,
+            quotedText ? 'Stored per lb, divided from the quoted price. On-hand drops by exactly these weights.' : 'Priced per lb. On-hand drops by exactly these weights.'];
         if (missing.length) warnings.push(`Nothing on hand for: ${missing.join(', ')} — left out.`);
         if (!outbound.some((o) => keyOf(o.buyer) === keyOf(buyer))) warnings.push(`${buyer} has no earlier sale in the yard records — check the spelling.`);
         return {
-            summary: `Record a sale to ${buyer} on ${p.date}: ${lines.map((l) => `${l.description} ${Math.round(l.weight).toLocaleString()} lb`).join(', ')} at ${perLb(price)}/lb (${money(amount)}).`,
+            summary: `Sell ALL on hand to ${buyer} on ${p.date}: ${lines.map((l) => `${l.description} ${Math.round(l.weight).toLocaleString()} lb`).join(', ')} at ${perLb(price)}/lb (${money(amount)}).`,
             details, warnings,
             run: async (c = {}) => {
                 const { addOutboundLoad } = require('./outboundLoads');
@@ -1469,6 +1476,102 @@ TOOLS.record_outbound_sale = {
                 return addOutboundLoad({
                     date: p.date, buyer, description: str(p.note),
                     items: lines.map((l) => ({ description: l.description, gross_weight: l.weight, tare_weight: 0, price, unit: '', draws: l.draws })),
+                    weight_unit: 'lb',
+                    created_by: c.role || ctx.role || 'yard-assistant',
+                });
+            },
+        };
+    },
+};
+
+// ── ONE SALE, WITH HER WEIGHTS (2026-11-21) ────────────────────────────────
+// Apsara: "create a sale for 11/17/2026 Edge Yard Metalco, Inc. 261117_HMS_26Metalco29 NAM8794895 CMAU8789121 0345215
+// HMS 81500 31060 … 50,440 for Metalco". The assistant had only record_outbound_sale, which sells ALL stock, and it
+// recorded 111,069 lb. This is the tool that should have existed: ONE sale, the weights she gave, nothing inferred.
+//
+// Same write path as the attachment sales (addOutboundLoad, gross/tare/price per lb), so the Sales screen, stock and
+// reports see it exactly as a hand-entered sale. The numbers are hers: gross and tare (net worked out), or net alone.
+// If she gives all three and they disagree, the card says so rather than picking one quietly. A container already on
+// a sale is refused — that is the duplicate a retyped paste would otherwise create.
+TOOLS.record_sale = {
+    kind: 'write',
+    description: 'Record ONE sale (one load / one lot shipped) with the weights she gives: gross and tare, or net. Use this whenever a weight or a single load is mentioned — e.g. "create a sale … HMS 81500 31060 … 50,440 for Metalco". Pass her numbers exactly; never compute or invent a weight. ASK for the price and the date if not given.',
+    params: {
+        buyer: { type: 'string', required: true, describe: 'who bought it, as she wrote it' },
+        date: { type: 'date', required: true, describe: 'the sale date as YYYY-MM-DD — ASK, do not assume today' },
+        item: { type: 'string', required: true, describe: 'the material, e.g. "HMS"' },
+        gross: { type: 'number', describe: 'gross weight in lb, exactly as given' },
+        tare: { type: 'number', describe: 'tare weight in lb, exactly as given (the total tare if several are listed)' },
+        net: { type: 'number', describe: 'net weight in lb, exactly as given' },
+        price: { type: 'number', required: true, describe: 'price in the unit given by price_per — ASK, do not guess' },
+        price_per: { type: 'string', describe: 'lb (default), metric_ton (MT), gross_ton or net_ton — pass it AS SHE SAID IT; never convert yourself' },
+        container: { type: 'string' }, booking: { type: 'string' }, seal: { type: 'string' },
+        reference: { type: 'string', describe: 'her own reference / invoice number, e.g. 261117_HMS_26Metalco29' },
+        company: { type: 'string', describe: 'which of her companies SOLD it, if she said (e.g. "Edge Yard")' },
+        note: { type: 'string' },
+    },
+    propose: async (p, ctx = {}) => {
+        const { loadOutboundLoads } = require('./outboundLoads');
+        const buyer = str(p.buyer), item = str(p.item);
+        if (!buyer) throw new Error('who was it sold to?');
+        if (!item) throw new Error('what material was sold?');
+        if (!isYmd(p.date)) throw new Error('what date was the sale?');
+        const quoted = num(p.price);
+        if (quoted == null || quoted <= 0) throw new Error('what price? A sale needs one');
+        const { perLb: lbPrice, label } = perLbFrom(quoted, p.price_per);
+        const g = num(p.gross), t = num(p.tare), n = num(p.net);
+        let gross, tare, net;
+        const warnings = [];
+        if (g != null && g > 0) {
+            gross = g; tare = t != null && t >= 0 ? t : (n != null && n > 0 ? g - n : 0); net = gross - tare;
+            if (n != null && n > 0 && Math.abs(n - net) > 1) warnings.push(`Gross ${Math.round(g).toLocaleString()} − tare ${Math.round(tare).toLocaleString()} = ${Math.round(net).toLocaleString()} lb, but you also gave a net of ${Math.round(n).toLocaleString()} lb. The card uses gross − tare; cancel if the net is the right figure.`);
+        } else if (n != null && n > 0) {
+            gross = n; tare = 0; net = n;
+        } else {
+            throw new Error('what weight? Give me the gross and tare, or the net, in lb');
+        }
+        if (!(net > 0)) throw new Error(`gross ${gross} minus tare ${tare} leaves no weight — check the numbers`);
+        const container = str(p.container);
+        const existing = loadOutboundLoads();
+        if (container) {
+            const k = container.toUpperCase().replace(/\s+/g, '');
+            const dup = existing.find((o) => String(o.description || '').toUpperCase().replace(/\s+/g, '').includes(k));
+            if (dup) throw new Error(`container ${container} is already on sale ${dup.id} — I won't record it twice`);
+        }
+        const refs = [container && `Container ${container}`, str(p.booking) && `Booking ${str(p.booking)}`,
+            str(p.seal) && `Seal ${str(p.seal)}`, str(p.reference) && `Ref ${str(p.reference)}`].filter(Boolean);
+        const amount = Math.round(net * lbPrice * 100) / 100;
+        const fmt = (v) => Math.round(v).toLocaleString('en-US');
+        try {
+            const guard = require('./stockGuard');
+            const short = guard.shortfalls([{ description: item, gross_weight: gross, tare_weight: tare, net_weight: net }]);
+            if (short.length) warnings.push(guard.explain(short, 'lb'));
+        } catch (e) { /* the stock check is advice; it never blocks the card */ }
+        if (!existing.some((o) => String(o.buyer || '').toLowerCase().trim() === buyer.toLowerCase())) warnings.push(`${buyer} has no earlier sale in the yard records — check the spelling.`);
+        const details = [
+            ['Buyer', buyer], ['Sale date', p.date],
+            ['Material', item],
+            ['Weight', tare ? `${fmt(gross)} − ${fmt(tare)} = ${fmt(net)} lb net` : `${fmt(net)} lb net`],
+            ['Price', label === 'lb' ? `${perLb(lbPrice)} per lb` : `${money(quoted)} per ${label} = ${perLb(lbPrice)} per lb`],
+            ...(refs.length ? [['References', refs.join(' · ')]] : []),
+            ...(str(p.company) ? [['Sold by', str(p.company)]] : []),
+            ['Sale total', money(amount)],
+        ];
+        return {
+            summary: `Record a sale to ${buyer} on ${p.date}: ${item} ${fmt(net)} lb net at ${perLb(lbPrice)}/lb (${money(amount)}).`,
+            details, warnings,
+            run: async (c = {}) => {
+                const { addOutboundLoad, loadOutboundLoads: fresh } = require('./outboundLoads');
+                if (container) {
+                    const k = container.toUpperCase().replace(/\s+/g, '');
+                    const dup = fresh().find((o) => String(o.description || '').toUpperCase().replace(/\s+/g, '').includes(k));
+                    if (dup) throw new Error(`container ${container} was recorded on ${dup.id} meanwhile — nothing written`);
+                }
+                return addOutboundLoad({
+                    date: p.date, buyer,
+                    ...(str(p.company) ? { seller_company: str(p.company) } : {}),
+                    description: [refs.join(' · '), str(p.note)].filter(Boolean).join(' — '),
+                    items: [{ description: item, gross_weight: gross, tare_weight: tare, price: lbPrice, unit: '' }],
                     weight_unit: 'lb',
                     created_by: c.role || ctx.role || 'yard-assistant',
                 });

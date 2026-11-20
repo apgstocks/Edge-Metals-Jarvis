@@ -1,0 +1,94 @@
+diff --git a/dashboard/yard-lang.js b/dashboard/yard-lang.js
+index 98c5939..ee10da6 100644
+--- a/dashboard/yard-lang.js
++++ b/dashboard/yard-lang.js
+@@ -296,20 +296,45 @@
+     anyTranslated = false;
+   }
+ 
+-  // ── the switch, top right, next to the notification bell ──
++  // ── WHERE THE SWITCH LIVES (2026-11-21) ──
++  // Reported 2026-11-21: "in some of the browser, language space overlaps with +load on the screen". It floated over the page
++  // (position:fixed, top right), and a floating thing lands on whatever the page puts under it — + Load sits top
++  // right, and where exactly depends on the window width and the browser's fonts. A first fix nudged it to the top
++  // edge; nudging cannot be right for every browser. So in the app it is no longer floating at all: it sits in the
++  // menu's footer, above Sign out, in the page's own flow, where nothing can be drawn under it. On a narrow window
++  // that menu folds behind ☰ and the switch goes with it, exactly like Sign out.
++  // The sign-in screen has no menu and no + Load, so there it stays a small tab at the top-right edge.
++  var FLOAT_CSS = 'position:fixed; top:0; right:72px; z-index:61; border:1px solid var(--steel-700, #444); border-top:none; border-radius:0 0 10px 10px; overflow:hidden; font:600 10px/1 var(--font-mono, monospace); letter-spacing:.08em;';
++  var MENU_CSS = 'position:static; width:100%; margin-top:12px; border:1px solid var(--steel-700, #444); border-radius:16px; overflow:hidden; font:600 10.5px/1 var(--font-mono, monospace); letter-spacing:.08em;';
++  function place(t) {
++    var out = document.getElementById('btnSignout');
++    var inMenu = !!(out && out.parentNode);
++    if (inMenu && t.nextSibling !== out) out.parentNode.insertBefore(t, out);          // above Sign out
++    else if (!inMenu && t.parentNode !== document.body) document.body.appendChild(t);
++    var where = inMenu ? 'menu' : 'float';
++    if (t.dataset.where !== where) {
++      t.dataset.where = where;
++      var disp = t.style.display;
++      t.style.cssText = (inMenu ? MENU_CSS : FLOAT_CSS) + ' display:' + (disp || 'none') + ';';
++      [].forEach.call(t.querySelectorAll('button'), function (b) {
++        b.style.padding = inMenu ? '7px 0' : '5px 10px';
++        b.style.flex = inMenu ? '1 1 0' : '';
++      });
++    }
++  }
+   function paintToggle() {
+     var t = document.getElementById('yardLangToggle');
+     if (!t) {
+       t = document.createElement('div'); t.id = 'yardLangToggle'; t.setAttribute('role', 'group'); t.setAttribute('aria-label', 'Language / Idioma');
+-      t.style.cssText = 'position:fixed; top:22px; right:72px; z-index:61; display:none; border:1px solid var(--steel-700, #444); border-radius:16px; overflow:hidden; font:600 11px/1 var(--font-mono, monospace); letter-spacing:.08em;';
++      t.style.display = 'none';
+       ['en', 'es'].forEach(function (code) {
+         var b = document.createElement('button'); b.type = 'button'; b.dataset.lang = code; b.textContent = code.toUpperCase();
+-        b.style.cssText = 'border:none; padding:8px 11px; cursor:pointer;';
++        b.style.cssText = 'border:none; cursor:pointer;';
+         b.addEventListener('click', function () { setLang(code); });
+         t.appendChild(b);
+       });
+-      document.body.appendChild(t);
+     }
++    place(t);
+     var disp = yardHere() ? 'flex' : 'none';
+     if (t.style.display !== disp) t.style.display = disp;
+     if (t.dataset.painted === lang) return;                                 // repaint only when the choice changes
+diff --git a/tests/yard-spanish.js b/tests/yard-spanish.js
+index de0ee00..628a775 100644
+--- a/tests/yard-spanish.js
++++ b/tests/yard-spanish.js
+@@ -66,12 +66,34 @@ const text = (w, id) => w.document.getElementById(id).textContent;
+         await tick();
+         ck('starts in English', w.yardLang.get() === 'en');
+         ck('the yard screen is byte-for-byte unchanged', w.document.getElementById('viewRoot').innerHTML === before);
+-        ck('the switch is shown on a yard tab, at the top right', (() => { const t = w.document.getElementById('yardLangToggle'); return t && t.style.display === 'flex' && /right:\s*72px/.test(t.style.cssText); })());
++        // With no menu on the page (the sign-in screen), it is a small tab at the very top edge, top right.
++        ck('with no menu on the page, the switch is a tab at the top-right edge', (() => { const t = w.document.getElementById('yardLangToggle'); return t && t.style.display === 'flex' && /right:\s*72px/.test(t.style.cssText) && /top:\s*0/.test(t.style.cssText); })());
+         w.confirm('Are you sure you want to delete load X1?');
+         ck('dialogs pass through untouched in English', w.__dialogs[0][1] === 'Are you sure you want to delete load X1?');
+         ck('no option was given a value in English', !w.document.querySelector('#mode option').hasAttribute('value'));
+     }
+ 
++    section('A2 — in the app it sits in the menu, never over the page (2026-11-21)');
++    {
++        // Apsara: "in some of the browser, language space overlaps with +load". A floating switch lands on whatever the
++        // page draws under it; in the app it now lives in the menu footer, above Sign out, in the page's own flow.
++        const dom = new JSDOM(`<!doctype html><html lang="en"><head></head><body>${BODY}<aside id="sidebar"><div id="foot"><div id="roleLabel">ADMIN</div><button id="btnSignout">Sign out</button></div></aside></body></html>`,
++            { runScripts: 'dangerously', url: 'http://localhost/' });
++        const w = dom.window;
++        const s0 = w.document.createElement('script'); s0.textContent = "let CURRENT_TAB = 'loads';"; w.document.head.appendChild(s0);
++        const s1 = w.document.createElement('script'); s1.textContent = SRC; w.document.body.appendChild(s1);
++        await tick();
++        const t = w.document.getElementById('yardLangToggle');
++        ck('the switch is in the menu footer, directly above Sign out', t && t.parentNode.id === 'foot' && t.nextElementSibling && t.nextElementSibling.id === 'btnSignout');
++        ck('  it does not float (no fixed position), so nothing on the page can sit under it', t && !/fixed/.test(t.style.cssText) && /static/.test(t.style.position || t.style.cssText));
++        ck('  it is shown on a yard tab, both buttons sharing the width', t && t.style.display === 'flex' && [...t.querySelectorAll('button')].every((b) => /1 1 0/.test(b.style.flex)));
++        t.querySelector('[data-lang="es"]').click(); await tick();
++        ck('  it still switches the language from there', w.yardLang.get() === 'es' && t.querySelector('[data-lang="es"]').getAttribute('aria-pressed') === 'true');
++        ck('  and stays put afterwards (one move, no loop)', t.parentNode.id === 'foot' && w.document.querySelectorAll('#yardLangToggle').length === 1);
++        const index = require('fs').readFileSync(require('path').join(__dirname, '..', 'dashboard', 'index.html'), 'utf8');
++        ck('the real app page has the Sign out button the switch anchors to', /id="btnSignout"/.test(index));
++    }
++
+     section('B — Spanish on a yard tab');
+     const w = mount('loads');
+     await tick();
