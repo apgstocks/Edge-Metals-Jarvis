@@ -83,9 +83,22 @@ function getLATime(date = new Date()) {
 }
 
 // Days until MM/DD/YYYY date. 0 = today, negative = past, 999 = unparseable.
+// Both MM/DD/YYYY and YYYY-MM-DD. The dashboard booking form saves ISO
+// (toIsoDate) while mail and sheets give US dates, and this used to read only
+// the US form: "2026-09-16" came back as 999, so a booking saved from the form
+// never raised a cutoff alert and was never auto-archived (DALA05124600 sat on
+// the ledger 65 days past cutoff, found 2026-11-21). Anything that is neither
+// still answers 999 / null exactly as before.
+function splitDate(dateStr) {
+    const t = String(dateStr == null ? '' : dateStr).trim();
+    const iso = /^(\d{4})-(\d{1,2})-(\d{1,2})(?:$|[T\s])/.exec(t);
+    if (iso) return [iso[2], iso[3], iso[1]];
+    return t.split('/');
+}
+
 function daysUntil(dateStr) {
     try {
-        const [m, d, y] = String(dateStr).split('/');
+        const [m, d, y] = splitDate(dateStr);
         const target = new Date(y, m - 1, d);
         if (isNaN(target)) return 999;
         const today = getLADate(); today.setHours(0, 0, 0, 0);
@@ -96,7 +109,7 @@ function daysUntil(dateStr) {
 // Parse MM/DD/YYYY → Date (midnight local), or null
 function parseUSDate(dateStr) {
     try {
-        const [m, d, y] = String(dateStr).split('/');
+        const [m, d, y] = splitDate(dateStr);
         const dt = new Date(y, m - 1, d);
         return isNaN(dt) ? null : dt;
     } catch { return null; }
