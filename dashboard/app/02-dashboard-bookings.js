@@ -6,6 +6,23 @@ const INV_SUBTABS = [
 ];
 let invFrom = '', invTo = '', invSubTab = 'byType';
 
+// Ferrous / Non-ferrous / Unsorted (2026-11-20). The server sends .metal on each row only when the page asks for
+// ?split=metal, which only this tab does; a report without it simply shows no Type column.
+const INV_METALS = [['ferrous', 'Ferrous'], ['non-ferrous', 'Non-ferrous'], ['unsorted', 'Unsorted']];
+const invMetalLabel = (m) => (INV_METALS.find((x) => x[0] === m) || INV_METALS[2])[1];
+function invMetalStripHtml(data, hand) {
+  if (!data.metalAvailable || !data.byMetal) return '';
+  return `<div style="display:flex; gap:10px; flex-wrap:wrap; padding-bottom:10px;">${INV_METALS.map(([k, label]) => {
+    const t = data.byMetal[k] || {};
+    const v = hand ? t.onHand : t.net;
+    return `<div style="flex:1; min-width:170px; border:1px solid var(--border-subtle); border-radius:8px; padding:8px 12px;">
+      <div style="font-size:12px; color:var(--text-muted);">${label}</div>
+      <div style="font-size:16px; font-weight:700;">${esc((Math.round((Number(v) || 0) * 100) / 100).toLocaleString())} ${esc(data.unit || 'lb')}</div>
+      <div style="font-size:11px; color:var(--text-faint);">${hand ? 'on hand' : 'came in'} · ${t.rows || 0} item${t.rows === 1 ? '' : 's'}</div>
+    </div>`;
+  }).join('')}</div>`;
+}
+
 function invByTypeHtml(data) {
   // See mobInvByTypeHtml in the app for why On hand is absent under a date
   // filter — same rule, same reason, both clients.
@@ -14,14 +31,16 @@ function invByTypeHtml(data) {
   const stockCols = !!(data.onHandAvailable || data.periodAvailable);
   const endLabel = data.periodAvailable ? (data.periodEnd ? toUsDate(data.periodEnd) : 'today') : '';
   return data.byType.length ? `
+    ${invMetalStripHtml(data, stockCols)}
     ${data.periodAvailable ? `<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Net in and Shipped are for these dates. On hand is what was left on ${esc(endLabel)}.</div>` : data.onHandAvailable ? '' : '<div style="font-family:var(--font-mono); font-size:11px; color:var(--text-faint); padding-bottom:8px;">Showing what came IN for this date range — clear the dates to see what\'s on hand.</div>'}
     <table style="width:100%; border-collapse:collapse; font-size:13px;">
       <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-        <th style="padding:8px 6px;">Item type</th><th style="padding:8px 6px;" title="How many separate loads carried this item">Loads</th><th style="padding:8px 6px;" title="How many weighed lines, across all those loads">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${stockCols ? `<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">${data.periodAvailable ? 'On hand ' + esc(endLabel) : 'On hand'}</th>` : ''}<th style="padding:8px 6px;">Amount</th>
+        <th style="padding:8px 6px;">Item type</th>${data.metalAvailable ? '<th style="padding:8px 6px;" title="Ferrous, non-ferrous or Unsorted (set in Settings, Item maintenance)">Type</th>' : ''}<th style="padding:8px 6px;" title="How many separate loads carried this item">Loads</th><th style="padding:8px 6px;" title="How many weighed lines, across all those loads">Items</th><th style="padding:8px 6px;">Gross</th><th style="padding:8px 6px;">Tare</th><th style="padding:8px 6px;">Net in</th>${stockCols ? `<th style="padding:8px 6px;">Shipped</th><th style="padding:8px 6px; font-weight:700;">${data.periodAvailable ? 'On hand ' + esc(endLabel) : 'On hand'}</th>` : ''}<th style="padding:8px 6px;">Amount</th>
       </tr></thead>
       <tbody>
         ${data.byType.map(g => `<tr class="inv-type-row" data-inv-toggle="${esc(g.description)}" title="Show every ${esc(g.description)} line, load by load" style="border-bottom:1px solid var(--border-subtle); cursor:pointer;">
           <td style="padding:8px 6px; color:var(--accent);">▸ ${esc(g.description)}</td>
+          ${data.metalAvailable ? `<td style="padding:8px 6px; color:${g.metal === 'unsorted' ? 'var(--text-faint)' : 'var(--text-strong)'};">${esc(invMetalLabel(g.metal))}</td>` : ''}
           <!-- LOADS, then items. Apsara, 2026-10-17: "item basis what how
                much loads we bought from this date to that date". The count
                beside it is weighed LINES and was the only number here - one
@@ -44,7 +63,7 @@ function invByTypeHtml(data) {
         </tr>
         <!-- The lines behind that row, per Apsara 2026-09-02. Empty and
              hidden until the type is opened; filled by renderInvLines. -->
-        <tr><td colspan="${stockCols ? 9 : 7}" style="padding:0;"><div data-inv-lines="${esc(g.description)}" style="display:none;"></div></td></tr>`).join('')}
+        <tr><td colspan="${(stockCols ? 9 : 7) + (data.metalAvailable ? 1 : 0)}" style="padding:0;"><div data-inv-lines="${esc(g.description)}" style="display:none;"></div></td></tr>`).join('')}
       </tbody>
     </table>
   ` : `<div style="padding:20px; color:var(--text-muted); font-size:13px;">No items in this range.</div>`;
@@ -54,13 +73,14 @@ function invByDayHtml(data) {
   return data.byDay.length ? `
     <table style="width:100%; border-collapse:collapse; font-size:13px;">
       <thead><tr style="text-align:left; border-bottom:1px solid var(--border-subtle);">
-        <th style="padding:8px 6px;">Date</th><th style="padding:8px 6px;">Loads</th><th style="padding:8px 6px;">Net total</th><th style="padding:8px 6px;">Amount total</th>
+        <th style="padding:8px 6px;">Date</th><th style="padding:8px 6px;">Loads</th><th style="padding:8px 6px;">Net total</th>${data.metalAvailable ? '<th style="padding:8px 6px;">Ferrous</th><th style="padding:8px 6px;">Non-ferrous</th><th style="padding:8px 6px;">Unsorted</th>' : ''}<th style="padding:8px 6px;">Amount total</th>
       </tr></thead>
       <tbody>
         ${data.byDay.map(d => `<tr style="border-bottom:1px solid var(--border-subtle);">
           <td style="padding:8px 6px;">${esc(fmtDate(d.date))}</td>
           <td style="padding:8px 6px;">${d.loadCount}</td>
           <td style="padding:8px 6px;">${d.net} ${esc(data.unit)}</td>
+          ${data.metalAvailable && d.metal ? `<td style="padding:8px 6px;">${d.metal.ferrous} ${esc(data.unit)}</td><td style="padding:8px 6px;">${d['metal']['non-ferrous']} ${esc(data.unit)}</td><td style="padding:8px 6px; color:var(--text-faint);">${d.metal.unsorted} ${esc(data.unit)}</td>` : ''}
           <td style="padding:8px 6px;">$${d.amount}</td>
         </tr>`).join('')}
       </tbody>
@@ -133,6 +153,7 @@ async function renderInventory() {
   if (invFrom) params.set('from', invFrom);
   if (invTo) params.set('to', invTo);
   if (invFrom || invTo) params.set('stock', 'period');   // shipped + on hand for the range too (2026-11-20)
+  params.set('split', 'metal');                           // Ferrous / Non-ferrous / Unsorted (2026-11-20)
   const qs = params.toString() ? '?' + params.toString() : '';
   const root = $('viewRoot');
   root.innerHTML = '<div style="padding:60px; text-align:center; color:var(--text-faint); font-family:var(--font-mono); font-size:13px;">Loading…</div>';
@@ -971,7 +992,10 @@ async function renderPartners() {
     // is being shown under a combined tab.
     const host = $('viewRoot') && $('viewRoot').querySelector('section');
     if (!host) return;
-    const btn = (id, label) => `<button class="btn partners-tab" data-partners-tab="${id}" style="font-size:12px; padding:6px 14px;${partnersTab === id ? ' background:var(--surface-raised); color:var(--text-strong);' : ''}">${label}</button>`;
+    // The open tab is solid green, the other plainly outlined (2026-11-20, Apsara: "Selected one should be
+    // highlighted na" — same fix as Petty cash's Cash / Borrowing). Before, the open tab's --surface-raised nearly
+    // matched the page and the closed one had no background, so the browser's grey made it look selected.
+    const btn = (id, label) => `<button class="btn partners-tab ${partnersTab === id ? 'btn-primary' : 'btn-secondary'}" data-partners-tab="${id}" aria-pressed="${partnersTab === id}" style="font-size:12px; padding:6px 14px;">${label}</button>`;
     host.insertAdjacentHTML('afterbegin',
         `<div style="display:flex; gap:8px; margin-bottom:18px;">${btn('truckers', 'Truckers')}${btn('suppliers', 'Suppliers')}</div>`);
     host.querySelectorAll('.partners-tab').forEach((b) => b.addEventListener('click', () => {
@@ -1196,6 +1220,7 @@ async function inventoryAutoRefresh() {
   // must ask exactly what renderInventory asked, or the comparison below always differs and the tab repaints
   // every 30 seconds
   if (invFrom || invTo) params.set('stock', 'period');
+  params.set('split', 'metal');
   const sentFrom = invFrom, sentTo = invTo;
   try {
     const fresh = await api('/api/loads/inventory' + (params.toString() ? '?' + params.toString() : ''));

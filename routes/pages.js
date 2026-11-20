@@ -69,6 +69,11 @@ module.exports = function (app, ctx) {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'ai-usage.html'));
     });
 
+    // Audit log (2026-11-20) — every yard change, who and before → after. The data route is admin-only.
+    app.get('/audit', (req, res) => {
+        res.sendFile(path.join(cfg.ROOT, 'dashboard', 'audit.html'));
+    });
+
     app.get('/documents', (req, res) => {
         res.sendFile(path.join(cfg.ROOT, 'dashboard', 'documents.html'));
     });

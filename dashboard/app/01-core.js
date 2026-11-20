@@ -415,6 +415,9 @@ const NAV_ITEMS = [
   // below. adminOnly: carries buyer pricing/margin, same call as Bot &
   // Automation/Contacts & Outreach's admin-only entries.
   { id: 'outbound-loads', label: 'Outbound Loads', group: 'Edge Yard', adminOnly: true },
+  // Audit log (2026-11-20) — Apsara: every operation logged, "Yard first", "Manager only". Its own page (/audit);
+  // the data route /api/change-log is requireAdmin, which is the real boundary. Read-only.
+  { id: 'audit', label: 'Audit Log', group: 'Edge Yard', adminOnly: true },
 
   // Freight-forwarding/booking side of the app.
   { id: 'board',     label: 'Board',     group: 'Edge Metals' },
@@ -882,6 +885,7 @@ function renderNav() {
     if (b.dataset.tab === 'outbound-loads') { window.location.href = '/outbound-loads'; return; }
     if (b.dataset.tab === 'documents') { window.location.href = '/documents'; return; }
     if (b.dataset.tab === 'ai-usage') { window.location.href = '/ai-usage'; return; }
+    if (b.dataset.tab === 'audit') { window.location.href = '/audit'; return; }
     if (b.dataset.tab === 'edge-inventory') { window.location.href = '/edge-inventory'; return; }
     // The accounting portal opens on its first tab; accounting.js moves
     // between /workspace, /bank-match, /books and /quickbooks from there.

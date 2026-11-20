@@ -174,7 +174,8 @@ section('D — and the screens show it');
     ck('  the drill-down colspan follows the new column',
        // 2026-11-20: the stock columns now also show under a date range on the website (stockCols); the
        // drill-down must span 9 whenever they show, 7 when they do not
-       /colspan="\$\{(data\.onHandAvailable|stockCols) \? 9 : 7\}"/.test(inv),
+       // and one more when the Type column is there (Fe / Non-Fe, 2026-11-20: metalAvailable)
+       /colspan="\$\{\(?(data\.onHandAvailable|stockCols) \? 9 : 7\)?( \+ \(data\.metalAvailable \? 1 : 0\))?\}"/.test(inv),
        'colspan was not updated, so the expanded lines will not span the table');
 
     const out = fs.readFileSync(path.join(ROOT, 'dashboard/outbound-loads.html'), 'utf8');

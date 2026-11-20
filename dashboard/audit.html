@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Audit log</title>
+<style>
+/* Apsara, 2026-11-20: "For each and every operation, we need to have audit log right?" — yard first, manager only.
+   Read-only: there is no edit or delete anywhere on this page, and no route behind it that could do either.
+   Data: GET /api/change-log (admin only). Store: helpers/changeLog.js. */
+:root{
+  --bg:#0C0E10; --card:#14181B; --sunk:#0F1214; --line:#2B3239; --soft:#1E2429;
+  --strong:#FFFFFF; --body:#CBD1D6; --muted:#A7B0B7; --faint:#7E8891;
+  --ok:#3DA836; --warn:#D99A2B; --bad:#C5402F; --from:#E07A6B; --to:#6FC56A;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--body);font:14px/1.5 "IBM Plex Sans",system-ui,sans-serif}
+header{display:flex;align-items:center;gap:16px;padding:14px 20px;border-bottom:1px solid var(--soft)}
+header a{color:var(--muted);text-decoration:none}
+h1{margin:0;font-size:18px;color:var(--strong)}
+main{max-width:1200px;margin:0 auto;padding:18px 16px 60px}
+.intro{color:var(--muted);font-size:13px;margin:0 0 14px}
+.filters{display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;background:var(--card);border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin-bottom:14px}
+.filters label{display:flex;flex-direction:column;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);gap:4px}
+input,select{background:var(--sunk);color:var(--body);border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;font-size:13px}
+button{background:#2A3138;color:var(--strong);border:1px solid var(--line);border-radius:6px;padding:7px 14px;font:inherit;font-size:13px;cursor:pointer}
+button.primary{background:var(--ok);border-color:var(--ok)}
+.note{background:var(--sunk);border:1px solid var(--line);border-left:3px solid var(--warn);border-radius:6px;padding:9px 12px;margin:0 0 10px;font-size:12.5px}
+.note.bad{border-left-color:var(--bad)}
+table{width:100%;border-collapse:collapse;font-size:13px;background:var(--card);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+th{text-align:left;font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--faint);padding:8px 10px;background:var(--sunk)}
+td{padding:8px 10px;border-top:1px solid var(--soft);vertical-align:top}
+tr.row{cursor:pointer}
+tr.row:hover td{background:#181D21}
+.when{white-space:nowrap;color:var(--muted);font-variant-numeric:tabular-nums}
+.who{white-space:nowrap;color:var(--strong)}
+.fail{color:var(--bad);font-size:12px}
+.sum{color:var(--muted);font-size:12.5px}
+.detail td{background:var(--sunk)}
+.chg{width:100%;border:none;background:none;font-size:12.5px}
+.chg td{border-top:1px solid var(--soft);padding:4px 8px}
+.chg .f{color:var(--muted);width:34%;word-break:break-all}
+.chg .a{color:var(--from);text-decoration:line-through;width:33%;word-break:break-word}
+.chg .b{color:var(--to);width:33%;word-break:break-word}
+pre{margin:6px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;color:var(--body);background:#0B0D0F;border:1px solid var(--soft);border-radius:6px;padding:8px}
+.meta{font-size:11.5px;color:var(--faint);margin-top:6px}
+.more{text-align:center;margin:14px 0}
+.empty{padding:30px;text-align:center;color:var(--faint)}
+</style>
+</head>
+<body>
+<header>
+  <a href="/">&larr; Back</a>
+  <h1>Audit log</h1>
+  <span style="flex:1"></span>
+  <span class="muted" id="count" style="color:var(--faint);font-size:12.5px"></span>
+</header>
+<main>
+  <p class="intro">Every change on the yard side: who made it, when, and what it was before and after. Nothing here can be edited or deleted. Click a row to see the details.</p>
+  <div class="filters">
+    <label>From<input type="date" id="from"></label>
+    <label>To<input type="date" id="to"></label>
+    <label>Person<input id="actor" placeholder="user ID or role" style="width:140px"></label>
+    <label>Record<input id="subject" placeholder="e.g. a load number" style="width:140px"></label>
+    <label>What<select id="action"><option value="">Everything</option></select></label>
+    <label>Search<input id="q" placeholder="any word" style="width:160px"></label>
+    <button class="primary" id="go">Show</button>
+    <button id="clear">Clear</button>
+  </div>
+  <div id="notes"></div>
+  <table>
+    <thead><tr><th>When</th><th>Who</th><th>What</th><th>Record</th><th>Changes</th></tr></thead>
+    <tbody id="rows"><tr><td colspan="5" class="empty">Loading…</td></tr></tbody>
+  </table>
+  <div class="more"><button id="more" hidden>Show older</button></div>
+</main>
+<script>
+(function () {
+  var ACTIONS = ['Sign in','Load created','Load edited','Load deleted','Load number changed','Load signed','Load sent to seller',
+    'Load PDF made','Load numbering changed','Payment recorded','Payment deleted','Payment settled against a document',
+    'Settlement removed','Prepayment recorded','Prepayment applied','Trucker bill added','Trucker bill edited',
+    'Trucker bill deleted','Expense added','Expense edited','Expense deleted','Cash added to petty cash',
+    'Cash moved between companies','Petty cash entry deleted','Sale created','Sale edited','Sale deleted',
+    'Sale marked delivered','Sale PDF made','Item type added','Item type changed','Item type removed',
+    'Item description added','Item description changed','Item description removed','Item set ferrous / non-ferrous',
+    'Items renamed or merged','Item rename undone','Supplier / buyer names merged','Supplier / buyer rename undone',
+    'Settings changed','Price list sent','Locked load unlock attempted','Scout action confirmed','Scout lesson forgotten',
+    'User added','User changed','User deleted','Role added','Role changed','Role deleted','Own password changed','Own language changed'];
+  var $ = function (id) { return document.getElementById(id); };
+  var sel = $('action');
+  ACTIONS.forEach(function (a) { var o = document.createElement('option'); o.value = a; o.textContent = a; sel.appendChild(o); });
+
+  var params = new URLSearchParams(location.search);
+  ['from','to','actor','subject','action','q'].forEach(function (k) { if (params.get(k)) $(k).value = params.get(k); });
+
+  var shown = [], total = 0, PAGE = 200;
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+  function val(v) { if (v === null || v === undefined) return '—'; if (typeof v === 'object') return JSON.stringify(v); return String(v); }
+  function when(iso) {
+    try { return new Date(iso).toLocaleString('en-US', { timeZone: 'America/Los_Angeles', month: 'short', day: 'numeric', year: 'numeric', hour: 'numeric', minute: '2-digit' }); }
+    catch (e) { return iso; }
+  }
+  function summary(r) {
+    if (!r.ok) return '<span class="fail">Refused' + (r.error ? ': ' + esc(r.error) : '') + '</span>';
+    if (r.changes && r.changes.length) {
+      var c = r.changes.slice(0, 2).map(function (x) { return esc(x.field) + ': ' + esc(val(x.from)) + ' → ' + esc(val(x.to)); }).join('; ');
+      return '<span class="sum">' + c + (r.changes.length > 2 ? ' … +' + (r.changes.length - 2) + ' more' : '') + '</span>';
+    }
+    if (r.before) return '<span class="sum">Removed (click to see what it was)</span>';
+    if (r.after) return '<span class="sum">New record (click to see it)</span>';
+    return '<span class="sum">Click for details</span>';
+  }
+  function detail(r) {
+    var h = '';
+    if (r.changes && r.changes.length) {
+      h += '<table class="chg"><tr><td class="f"><b>Field</b></td><td class="a" style="text-decoration:none"><b>Before</b></td><td class="b"><b>After</b></td></tr>';
+      r.changes.forEach(function (x) { h += '<tr><td class="f">' + esc(x.field) + '</td><td class="a">' + esc(val(x.from)) + '</td><td class="b">' + esc(val(x.to)) + '</td></tr>'; });
+      h += '</table>';
+    }
+    if (r.before) h += '<div class="meta">What was removed:</div><pre>' + esc(JSON.stringify(r.before, null, 2)) + '</pre>';
+    if (r.after) h += '<div class="meta">What was created:</div><pre>' + esc(JSON.stringify(r.after, null, 2)) + '</pre>';
+    if (r.request) h += '<div class="meta">What was sent:</div><pre>' + esc(JSON.stringify(r.request, null, 2)) + '</pre>';
+    if (r.result) h += '<div class="meta">What came back:</div><pre>' + esc(JSON.stringify(r.result, null, 2)) + '</pre>';
+    h += '<div class="meta">' + esc(r.method) + ' ' + esc(r.path) + ' · status ' + esc(r.status) + (r.role ? ' · role ' + esc(r.role) : '') + (r.ip ? ' · from ' + esc(r.ip) : '') + ' · entry ' + esc(r.id) + '</div>';
+    return h;
+  }
+  function paint() {
+    var tb = $('rows');
+    if (!shown.length) { tb.innerHTML = '<tr><td colspan="5" class="empty">No changes match.</td></tr>'; $('more').hidden = true; return; }
+    tb.innerHTML = shown.map(function (r, i) {
+      return '<tr class="row" data-i="' + i + '"><td class="when">' + esc(when(r.at)) + '</td><td class="who">' + esc(r.actor) + '</td><td>' + esc(r.action) +
+        '</td><td>' + (r.subject ? '<a href="#" data-subject="' + esc(r.subject) + '" style="color:var(--muted)">' + esc(r.subject) + '</a>' : '—') + '</td><td>' + summary(r) + '</td></tr>' +
+        '<tr class="detail" id="d' + i + '" hidden><td colspan="5">' + detail(r) + '</td></tr>';
+    }).join('');
+    $('more').hidden = shown.length >= total;
+    $('count').textContent = total + ' change' + (total === 1 ? '' : 's');
+  }
+  function query(offset) {
+    var p = new URLSearchParams();
+    ['from','to','actor','subject','action','q'].forEach(function (k) { var v = $(k).value.trim(); if (v) p.set(k, v); });
+    p.set('limit', PAGE); p.set('offset', offset || 0);
+    return p;
+  }
+  function load(append) {
+    var p = query(append ? shown.length : 0);
+    fetch('/api/change-log?' + p.toString(), { credentials: 'same-origin' }).then(function (r) {
+      if (r.status === 403) throw new Error('The audit log is for the manager login.');
+      if (!r.ok) throw new Error('Could not load the audit log (' + r.status + ').');
+      return r.json();
+    }).then(function (d) {
+      total = d.total || 0;
+      shown = append ? shown.concat(d.rows || []) : (d.rows || []);
+      var n = '';
+      if (d.write_failures) n += '<div class="note bad">' + d.write_failures + ' change(s) could not be written to the log since the server last started. The changes themselves were saved. Tell us.</div>';
+      if (d.skipped_lines) n += '<div class="note">' + d.skipped_lines + ' unreadable line(s) in the log were skipped.</div>';
+      $('notes').innerHTML = n;
+      paint();
+    }).catch(function (e) { $('rows').innerHTML = '<tr><td colspan="5" class="empty">' + esc(e.message) + '</td></tr>'; });
+  }
+  $('rows').addEventListener('click', function (ev) {
+    var a = ev.target.closest('a[data-subject]');
+    if (a) { ev.preventDefault(); ev.stopPropagation(); $('subject').value = a.getAttribute('data-subject'); load(false); return; }
+    var tr = ev.target.closest('tr.row'); if (!tr) return;
+    var d = $('d' + tr.getAttribute('data-i')); if (d) d.hidden = !d.hidden;
+  });
+  $('go').addEventListener('click', function () { load(false); });
+  $('clear').addEventListener('click', function () { ['from','to','actor','subject','action','q'].forEach(function (k) { $(k).value = ''; }); load(false); });
+  $('more').addEventListener('click', function () { load(true); });
+  ['actor','subject','q'].forEach(function (k) { $(k).addEventListener('keydown', function (e) { if (e.key === 'Enter') load(false); }); });
+  load(false);
+})();
+</script>
+<!-- The shared left menu, like every other standalone page (dashboard/sidebar.js). -->
+<script src="/sidebar.js" data-page="audit" defer></script>
+</body>
+</html>

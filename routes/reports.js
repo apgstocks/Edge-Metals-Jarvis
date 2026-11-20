@@ -401,6 +401,21 @@ module.exports = function (app, ctx) {
             res.json({ ok: true, ...require('./helpers/activityFeed').feed({ limit }) });
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
+
+    // ── CHANGE LOG, read side (2026-11-20) ────────────────────────────────
+    // Apsara: "Manager only". requireAdmin is the boundary; the nav entry being adminOnly is only so nobody sees a
+    // page that would refuse them. Read-only — the log has no write or delete route, by design (helpers/changeLog.js).
+    app.get('/api/change-log', requireAdmin, (req, res) => {
+        try {
+            const q = req.query || {};
+            const day = (v) => (/^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) ? String(v) : undefined);
+            const limit = Math.min(Math.max(parseInt(q.limit, 10) || 200, 1), 1000);
+            const offset = Math.max(parseInt(q.offset, 10) || 0, 0);
+            res.json({ ok: true, ...require('./helpers/changeLog').list({
+                from: day(q.from), to: day(q.to), actor: q.actor || undefined, subject: q.subject || undefined,
+                action: q.action || undefined, q: q.q || undefined, limit, offset }) });
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
 // @@chunk-end
 
 };

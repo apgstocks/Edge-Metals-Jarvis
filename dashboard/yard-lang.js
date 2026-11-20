@@ -301,10 +301,12 @@
     var t = document.getElementById('yardLangToggle');
     if (!t) {
       t = document.createElement('div'); t.id = 'yardLangToggle'; t.setAttribute('role', 'group'); t.setAttribute('aria-label', 'Language / Idioma');
-      t.style.cssText = 'position:fixed; top:22px; right:72px; z-index:61; display:none; border:1px solid var(--steel-700, #444); border-radius:16px; overflow:hidden; font:600 11px/1 var(--font-mono, monospace); letter-spacing:.08em;';
+      // A small tab hanging from the very top edge, not a pill lower down: at top:22px it sat on top of the Loads page's
+      // + Load button (found in the manual's screenshots, 2026-11-20). The Loads header starts ~28px down; this ends ~20px.
+      t.style.cssText = 'position:fixed; top:0; right:72px; z-index:61; display:none; border:1px solid var(--steel-700, #444); border-top:none; border-radius:0 0 10px 10px; overflow:hidden; font:600 10px/1 var(--font-mono, monospace); letter-spacing:.08em;';
       ['en', 'es'].forEach(function (code) {
         var b = document.createElement('button'); b.type = 'button'; b.dataset.lang = code; b.textContent = code.toUpperCase();
-        b.style.cssText = 'border:none; padding:8px 11px; cursor:pointer;';
+        b.style.cssText = 'border:none; padding:5px 10px; cursor:pointer;';
         b.addEventListener('click', function () { setLang(code); });
         t.appendChild(b);
       });

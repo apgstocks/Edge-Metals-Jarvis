@@ -61,7 +61,9 @@ const make = (args) => spawnSync('node', [SCRIPT, ...args], { encoding: 'utf8', 
     ck('the live repo still has Outbound Loads in both menus', ['dashboard/app/01-core.js', 'dashboard/sidebar.js'].every((rel) => /id: 'outbound-loads'/.test(fs.readFileSync(path.join(ROOT, rel), 'utf8'))));
     // Apsara 2026-11-19: the trial is the yard app under the customer's own name, with a yard-only menu.
     {
-        const TRIAL_IDS = ['loads', 'inventory', 'petty', 'trucker-bills', 'expenses', 'documents', 'address-book', 'settings', 'users'];
+        // 'audit' added 2026-11-20 — Apsara: every operation logged, "Yard first", "Manager only"; customer copies have
+        // per-person logins, which is where knowing who changed what matters most.
+        const TRIAL_IDS = ['loads', 'inventory', 'petty', 'trucker-bills', 'expenses', 'audit', 'documents', 'address-book', 'settings', 'users'];
         const ids = (rel, root) => [...fs.readFileSync(path.join(root, rel), 'utf8').matchAll(/^[ \t]*\{ id: '([a-z-]+)',/gm)].map((m) => m[1]);
         for (const rel of ['dashboard/app/01-core.js', 'dashboard/sidebar.js'])
             ck(`${rel}: the trial menu is exactly the yard pages (${TRIAL_IDS.length})`, JSON.stringify(ids(rel, out)) === JSON.stringify(TRIAL_IDS), ids(rel, out).join());

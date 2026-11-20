@@ -95,6 +95,21 @@ const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'jarvis-users-'));
         // enforcement: the property that matters
         const st = async (u, m, p, b) => (await req(m, p, b || null, S[u])).status;
         ck('maria (Loads + Inventory): loads, drafts, sales, stock and the address book work', (await Promise.all(['/api/loads', '/api/load-drafts', '/api/outbound-loads', '/api/loads/inventory', '/api/address-book', '/api/item-types'].map((p) => st('maria', 'GET', p)))).every((s) => s === 200));
+
+        // ── the audit log names the PERSON in a copy (2026-11-20, Apsara: every operation logged, manager only) ──
+        {
+            const made = await req('POST', '/api/loads', { date: '2026-11-20', seller: 'Audit Seller', items: [{ description: 'Rotors', gross_weight: 50000, tare_weight: 3440, price: 0.3, unit: 'lb' }] }, S.maria);
+            ck('maria saves a load in the copy', made.status === 200, made.raw.slice(0, 160));
+            await new Promise((r2) => setTimeout(r2, 150));
+            const log = await req('GET', '/api/change-log?limit=500', null, owner);
+            const rows = (log.json || {}).rows || [];
+            const lid = ((made.json || {}).load || {}).id;
+            ck('the audit log names maria, not her role, on the load she saved', rows.some((r) => r.action === 'Load created' && r.actor === 'maria' && r.subject === lid), rows.filter((r) => r.action === 'Load created'));
+            ck('  her sign-in is logged under her user ID', rows.some((r) => r.action === 'Sign in' && r.ok && r.actor === 'maria'));
+            ck('  a failed sign-in records the ID that was tried, never the password', rows.some((r) => r.action === 'Sign in' && !r.ok && r.actor === 'nobody') && !log.raw.includes('wrong-wrong-1') && !log.raw.includes('pass-word-123'));
+            ck('  adding the people is logged too', rows.filter((r) => r.action === 'User added' && r.ok).length >= 4);
+            ck('a manager by user ID can read the log; maria cannot', (await st('boss', 'GET', '/api/change-log')) === 200 && (await st('maria', 'GET', '/api/change-log')) === 403);
+        }
         ck('maria cannot open petty cash, trucker bills, expenses, settings, users, payments or documents', (await Promise.all(['/api/petty-cash', '/api/trucker-bills', '/api/expenses', '/api/settings', '/api/users', '/api/roles', '/api/documents/saved', '/api/item-maintenance'].map((p) => st('maria', 'GET', p)))).every((s) => s === 403));
         ck('maria cannot pay anyone or record money (payments is manager-only)', (await st('maria', 'POST', '/api/payments', { amount: 1 })) === 403 && (await st('maria', 'POST', '/api/petty-cash', { amount: 5 })) === 403);
         ck('maria cannot create users or roles or reset a password', (await st('maria', 'POST', '/api/users', { id: 'x1x', name: 'x', roleId: 'manager', password: 'long-enough-1' })) === 403 && (await st('maria', 'POST', '/api/roles', { name: 'Evil', pages: ['loads'] })) === 403 && (await st('maria', 'PUT', '/api/users/ravi', { password: 'taken-over-123' })) === 403 && (await st('maria', 'GET', '/users')) === 403);

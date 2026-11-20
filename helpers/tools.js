@@ -427,6 +427,8 @@ const TOOLS = {
             const { loadCustomItemTypes } = require('./itemTypes');
             const aliases = require('./itemAliases');
             return {
+                // Ferrous / non-ferrous as she has answered it per item (helpers/itemMetal.js), 2026-11-20.
+                metal_types: (() => { try { return require('./itemMetal').all(); } catch (e) { return {}; } })(),
                 descriptions: loadCustomItemTypes(),
                 // ── ONLY THE ONES SHE SETTLED ────────────────────────────
                 // helpers/itemAliases.js stores AI verdicts alongside her
@@ -571,14 +573,157 @@ const TOOLS = {
         },
     },
 
+    // ── PETTY CASH, ALL OF IT (2026-11-20) ────────────────────────────────
+    // Apsara, on "$-25,386.03 company not stated" on her Petty cash screen: "i want scout to answer such kind of
+    // questions", then "any data available in edge yard should be reasoned by scout". This used to return the total
+    // and the last 20 rows — enough for "how much cash do we have", useless for "why is this company's figure what
+    // it is". It still returns both (anything that asked before gets what it got), plus the per-account and
+    // per-company split the screen shows, borrowings between accounts, and — with `account` — every movement in one
+    // bucket with its ins and outs summed by kind, so a negative bucket can be EXPLAINED from its own rows.
+    //
+    // "Company not stated" is the Unassigned account: cash recorded with no bank behind it (the opening float, rows
+    // from before accounts existed, and anything typed that matched no account). The tool says that in words so the
+    // model never guesses a company for it — helpers/pettyCash.js refuses to, and so must the answer.
     petty_cash: {
         kind: 'read',
-        description: 'The cash box: current balance and recent movements.',
-        params: {},
-        run: async () => {
+        description: 'The petty cash box, fully: total cash in hand; the balance of each cash account (Edge Metals, AAA Investment, Chase Bank, Unassigned) and of each company (Edge Metals, AAA Investment, Edge Yard, "Company not stated" = the Unassigned account); money borrowed between accounts; and recent movements. Pass account (an account OR a company name, including "Company not stated" / "Unassigned") to EXPLAIN that figure: every movement in it, with money in and out totalled by kind (top-up, payment, expense, transfer, reversal) and the load or seller behind each payment. Use for any question about why a cash or company figure is what it is, especially a negative one.',
+        params: {
+            account: { type: 'string', describe: 'an account or company to explain, e.g. "Company not stated", "Unassigned", "Edge Yard", "Chase Bank"' },
+            from: { type: 'date', describe: 'only movements on or after this date' },
+            to: { type: 'date', describe: 'only movements on or before this date' },
+        },
+        run: async (p) => {
             const petty = require('./pettyCash');
             const entries = petty.listEntries();
-            return { balance: petty.balance(), ...cap(entries.slice(-20).reverse()) };
+            const b = petty.balances();
+            const out = {
+                balance: petty.balance(),
+                by_account: b.bySource, by_company: b.byCompany, bank_of_account: b.bankOf, company_of_account: b.companyOf,
+                company_not_stated_means: `"${petty.COMPANY_UNKNOWN}" is the ${petty.UNASSIGNED} account: cash recorded with no bank or company behind it — the opening float, rows from before accounts existed, and any name that matched no account. Nobody has said whose it is; do not assign it to a company.`,
+                pending_assignment: petty.pendingAssignment(entries),
+                borrowings: (() => { try { return petty.borrowings(entries); } catch (e) { return null; } })(),
+            };
+            const inRange = (e) => (!p.from || String(e.date || '') >= p.from) && (!p.to || String(e.date || '') <= p.to);
+            if (!p.account) return { ...out, ...cap(entries.filter(inRange).slice(-20).reverse()) };
+
+            const want = String(p.account).trim().toLowerCase();
+            const isUnknown = want === petty.COMPANY_UNKNOWN.toLowerCase() || want === 'company not stated' || want === 'not stated' || want === 'unassigned';
+            const accounts = petty.SOURCES.filter((s) => (isUnknown ? s === petty.UNASSIGNED
+                : s.toLowerCase() === want || petty.companyOf(s).toLowerCase() === want));
+            if (!accounts.length) return { ...out, error: `"${p.account}" is not a cash account or company here. Accounts: ${petty.SOURCES.join(', ')}.` };
+
+            // Who a payment row was for, so "a payment" becomes "paid Randy for EDGE_47".
+            const loads = (() => { try { return require('./loads').loadLoads(); } catch (e) { return []; } })();
+            const sellerOf = (id) => { const l = id && loads.find((x) => x.id === id); return l ? (l.seller || l.buyer || null) : null; };
+            const rows = entries.filter((e) => accounts.includes(petty.sourceOf(e)) && inRange(e))
+                .sort((x, y) => String(x.date || '').localeCompare(String(y.date || '')))
+                .map((e) => ({ id: e.id, date: e.date, kind: e.kind, amount: num(e.amount), account: petty.sourceOf(e),
+                    typed_account: e.cash_source || null, load_id: e.load_id || null, seller: sellerOf(e.load_id),
+                    expense_id: e.expense_id || null, transfer_reason: e.transfer_reason || null,
+                    transfer_to: e.transfer_to || null, transfer_from: e.transfer_from || null, note: e.note || null, by: e.created_by || null }));
+            const byKind = {};
+            let moneyIn = 0, moneyOut = 0;
+            for (const r of rows) {
+                const k = byKind[r.kind] || (byKind[r.kind] = { in: 0, out: 0, count: 0 });
+                k.count++;
+                if ((r.amount || 0) >= 0) { k.in += r.amount || 0; moneyIn += r.amount || 0; } else { k.out += r.amount || 0; moneyOut += r.amount || 0; }
+            }
+            const r2 = (v) => Math.round(v * 100) / 100;
+            for (const k of Object.values(byKind)) { k.in = r2(k.in); k.out = r2(k.out); }
+            return { ...out, explaining: { asked: p.account, accounts, balance: r2(moneyIn + moneyOut), money_in: r2(moneyIn), money_out: r2(moneyOut), by_kind: byKind },
+                // The biggest withdrawals first in their own list: a negative bucket is usually a handful of large payments.
+                largest_outflows: rows.filter((r) => (r.amount || 0) < 0).sort((x, y) => x.amount - y.amount).slice(0, 15),
+                ...cap(rows.slice().reverse()) };
+        },
+    },
+
+    // ── EVERY YARD PAYMENT, SEARCHABLE (2026-11-20) ───────────────────────
+    // "any data available in edge yard should be reasoned by scout". Payments were only reachable one load at a time
+    // (load_detail) or as totals (spend_report), so "everything we paid by Zelle in October" or "what did Chase pay
+    // for" had no answer. Reads data/payments.json — the yard's money ledger — and names who each payment was for.
+    find_payments: {
+        kind: 'read',
+        description: 'Search EVERY payment in the yard money ledger: paid to sellers on purchase loads, received from buyers on sales, paid to truckers, and supplier prepayments. Filter by who (seller, buyer or trucker, loosely), load number, mode (Cash, Zelle, Wire, Cheque, Bank transfer), bank, paid via (which company paid: Edge Yard, Edge Metals, AAA Investment) and date range. Returns each payment with who it was for, plus totals by mode, by bank and by company. Use for "what did we pay by Zelle", "how much did Edge Metals pay for yard loads", "payments to Randy in October".',
+        params: {
+            who: { type: 'string', describe: 'seller, buyer or trucker name, matched loosely' },
+            load_id: { type: 'string', describe: 'one load or sale number' },
+            mode: { type: 'string' }, bank: { type: 'string' }, paid_via: { type: 'string' },
+            kind: { type: 'string', describe: 'purchase, sale, trucker or prepayment' },
+            from: { type: 'date' }, to: { type: 'date' },
+        },
+        run: async (p) => {
+            const cfg = require('../config');
+            const all = (() => { try { const r = require('./json').loadJson(cfg.PAYMENTS_FILE, []); return Array.isArray(r) ? r : []; } catch (e) { return []; } })();
+            const loads = (() => { try { return require('./loads').loadLoads(); } catch (e) { return []; } })();
+            const sales = (() => { try { return require('./outboundLoads').loadOutboundLoads(); } catch (e) { return []; } })();
+            const bills = (() => { try { return require('./truckerBills').listBills(); } catch (e) { return []; } })();
+            const whoOf = (r) => {
+                if (r.is_advance) return r.seller || null;
+                if (r.load_kind === 'sale') { const s = sales.find((x) => x.id === r.load_id); return s ? s.buyer || null : null; }
+                if (r.load_kind === 'trucker') { const t = bills.find((x) => x.id === r.load_id); return t ? (t.company || t.trucker || null) : null; }
+                const l = loads.find((x) => x.id === r.load_id); return l ? l.seller || null : null;
+            };
+            const kindOf = (r) => (r.is_advance ? 'prepayment' : (r.load_kind || 'purchase'));
+            const lc = (v) => String(v == null ? '' : v).toLowerCase();
+            const rows = all.map((r) => ({ id: r.id, date: r.paid_on || null, kind: kindOf(r), who: whoOf(r), load_id: r.load_id || null,
+                mode: r.mode || null, bank: r.bank || null, paid_via: r.paid_via || null, amount: num(r.amount),
+                applied_from_prepayment: r.applied_from || null, reference: r.reference || null, note: r.note || null, by: r.created_by || null }))
+                .filter((r) => (!p.who || lc(r.who).includes(lc(p.who)))
+                    && (!p.load_id || lc(r.load_id) === lc(p.load_id))
+                    && (!p.mode || lc(r.mode) === lc(p.mode))
+                    && (!p.bank || lc(r.bank).includes(lc(p.bank)))
+                    && (!p.paid_via || lc(r.paid_via) === lc(p.paid_via))
+                    && (!p.kind || lc(r.kind) === lc(p.kind))
+                    && (!p.from || String(r.date || '') >= p.from) && (!p.to || String(r.date || '') <= p.to))
+                .sort((a, b) => String(b.date || '').localeCompare(String(a.date || '')));
+            const sum = (key) => rows.reduce((m, r) => { const k = r[key] || '(not recorded)'; m[k] = Math.round(((m[k] || 0) + (r.amount || 0)) * 100) / 100; return m; }, {});
+            // total_amount, NOT total: cap() returns its own `total` (the row count) and would overwrite a money figure
+            // of the same name — which is exactly what the first version of this did.
+            return { ...cap(rows), total_amount: Math.round(rows.reduce((a, r) => a + (r.amount || 0), 0) * 100) / 100, count: rows.length,
+                by_mode: sum('mode'), by_bank: sum('bank'), by_company: sum('paid_via'), by_kind: sum('kind') };
+        },
+    },
+
+    // Prepayments a seller still has credit from (2026-11-20). Named seller_, not supplier_: in this app "supplier" is a
+    // freight word (tests/voice-router.js guards it), and the yard calls the people it buys from sellers. record_prepayment could WRITE one and nothing could
+    // read what was left of it.
+    seller_credit: {
+        kind: 'read',
+        description: 'Seller prepayments (money paid to a seller BEFORE a load) and how much credit each seller still has unused. Pass seller for one seller; without it, every seller holding credit.',
+        params: { seller: { type: 'string', describe: 'seller name (exact as recorded); leave empty for everyone with credit' } },
+        run: async (p) => {
+            const pay = require('./payments');
+            if (p.seller) return pay.prepaymentCredit(p.seller);
+            const sellers = [...new Set(pay.listPrepayments().map((a) => a.seller).filter(Boolean))];
+            const rows = sellers.map((s) => pay.prepaymentCredit(s)).filter((r) => r.available > 0.005);
+            return cap(rows);
+        },
+    },
+
+    // Who changed what (2026-11-20) — the audit log built today, so "who changed the price on EDGE_47" and "what did
+    // Maria do yesterday" have an answer. Scout is manager-only already (/api/yard/ask), and so is the log.
+    change_history: {
+        kind: 'read',
+        description: 'The yard audit log: who changed what and when, with before → after values. Filter by record (a load number, bill or expense id), person (user ID or role), kind of change (e.g. "Load edited", "Payment deleted", "Sign in") and date range. Use for "who changed EDGE_47", "who deleted that payment", "what did maria do today". Starts from the day the log was switched on; earlier changes were not recorded.',
+        params: { subject: { type: 'string' }, actor: { type: 'string' }, action: { type: 'string' }, text: { type: 'string', describe: 'any word in the entry' },
+            from: { type: 'date' }, to: { type: 'date' } },
+        run: async (p) => {
+            const r = require('./changeLog').list({ subject: p.subject, actor: p.actor, action: p.action, q: p.text, from: p.from, to: p.to, limit: MAX_ROWS });
+            return { total: r.total, rows: r.rows, truncated: r.total > r.rows.length };
+        },
+    },
+
+    // Addresses (2026-11-20) — the Address Book page is on the yard menu, and its data was invisible to Scout.
+    find_address: {
+        kind: 'read',
+        description: 'Look up a seller, buyer or company in the Address Book: address, phone, email. Matched loosely on name and aliases.',
+        params: { name: { type: 'string', required: true } },
+        run: async (p) => {
+            const lc = (v) => String(v == null ? '' : v).toLowerCase();
+            const all = require('./addressBook').loadAddressBook() || [];
+            const want = lc(p.name).trim();
+            return cap((Array.isArray(all) ? all : []).filter((e) => lc(e.name).includes(want)
+                || (Array.isArray(e.aliases) && e.aliases.some((a) => lc(a).includes(want)))));
         },
     },
 

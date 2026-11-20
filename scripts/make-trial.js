@@ -77,6 +77,27 @@ function buildRules({ B, slug, email, phone }) {
         { re: /(?<!Chrome\/|Safari, |Microsoft )\bEdge\b(?! cases?\b)/g, to: B.split(/\s+/)[0] },
         { re: /\bEDGE\b/g, to: B.split(/\s+/)[0].toUpperCase() },
         { re: /AAA[ _-]?Investments?/gi, fn: (m) => keep(m, `${B} Holdings`) },
+        // Still visible on the yard screens after the menu was cut down (found 2026-11-19 by building a copy and
+        // grepping what a customer can open): the short "AAA" on Petty cash's split button, her two banks in the
+        // pay / petty cash / expense boxes, a supplier's first name in the assistant's examples, and her carrier on
+        // Documents > Verification. Rewritten everywhere at once so code that compares a bank name to a stored one
+        // still agrees with itself; the sample bank file uses the same two sample names.
+        { re: /\bAAA\b/g, to: 'Holdings' },
+        { re: /Chase Bank/g, to: 'Example Community Bank' },
+        { re: /\bChase\b/g, to: 'Example Community Bank' },
+        { re: /\bBofA\b/g, to: 'Sample National Bank' },
+        { re: /\bInesh\b/g, to: 'Riverside' },
+        { re: /EAGLE TRANS(PORT)?/g, to: 'SAMPLE CARRIER' },
+        { re: /Eagle Trans(port)?/g, to: 'Sample Carrier' },
+        { re: /eagle ?brit/gi, fn: (m) => keep(m, 'SampleCarrier') },
+        // Her customers' and broker's names in the Documents page's example text and the Verification tab's buttons
+        // (found 2026-11-20 while photographing the manual). Whole words, display spellings only, so identifiers such as
+        // extractJoeyCommissionInvoice keep working.
+        { re: /\btaewon\b/gi, fn: (m) => keep(m, 'Harborco') },   // one word: it is also a key in code (TAEWON, taewon)
+        { re: /\bRad Metal\b/g, to: 'Sample Metal' },
+        { re: /\bPan Metal\b/g, to: 'Sample Broker' },
+        { re: /\bJoey\b/g, to: 'Broker' },
+        { re: /\bEccomelt\b/gi, to: 'Buyerco' },
         // people and customers named in comments, defaults and fixtures
         { re: /\bapsara\b/gi, fn: (m) => (m === 'Apsara' ? 'the owner' : keep(m, 'owner')) },
         { re: /\bbose\b/gi, fn: (m) => keep(m, 'ops') },
@@ -111,6 +132,8 @@ function walk(dir, rel = '') {
 const FORBIDDEN = [
     /edge ?(metals?|trading|yard)/i, /edgemetals/i, /apsara/i, /\bbose@/i, /apg0596/i, /zimex/i, /metalco/i, /daekwang/i,
     /(?<!Chrome\/|Safari, |Microsoft )\bEdge\b(?! cases?\b)/, /\bEDGE\b/, /938[ -]?2525/, /8056944193/, /devonshire/i, /\bfrisco\b/i, /radmetals/i,
+    /\bAAA\b/, /\bBofA\b/, /\bChase\b/, /\bInesh\b/, /eagle ?trans|eagle ?brit/i,
+    /\btaewon\b/i, /\bRad Metal\b/, /\bPan Metal\b/, /\bJoey\b/, /\beccomelt\b/i,
 ];
 
 function main() {
@@ -156,7 +179,7 @@ function main() {
     // and Accounting (the QuickBooks / bank portal is built for the three Edge companies and has nothing to show
     // without them). The menu entries are removed; the routes and data stay, because the Loads page reads Sales from
     // /api/outbound-loads and other pages call shared routes.
-    const TRIAL_MENU = ['loads', 'inventory', 'petty', 'trucker-bills', 'expenses', 'documents', 'address-book', 'settings'];
+    const TRIAL_MENU = ['loads', 'inventory', 'petty', 'trucker-bills', 'expenses', 'documents', 'address-book', 'settings', 'audit'];   // audit: 2026-11-20, every change logged, manager only
     const YARD_GROUP = apply('Edge Yard', rules);                    // the group name as it reads in the copy
     for (const rel of ['dashboard/app/01-core.js', 'dashboard/sidebar.js']) {
         const f = path.join(out, apply(rel, rules));
@@ -193,6 +216,11 @@ function main() {
         fs.writeFileSync(f, t);
     };
     const MARK = B.split(/\s+/)[0].slice(0, 1).toUpperCase();
+    // Documents > Bank told the reader to edit a server file and deploy: true for the owner, meaningless to a customer.
+    patch('dashboard/documents.html', [
+        [`+ '<br>To change any of this, edit <span style="font-family:var(--font-mono);">qb-settings/bank-accounts.json</span> and deploy. It is deliberately not editable from this screen.';`,
+         `+ '<br>These are sample details. To put your own bank details here, contact us.';`, 'bank tab footnote'],
+    ]);
     patch('dashboard/app/01-core.js', [
         ["let CURRENT_TAB = 'board';", "let CURRENT_TAB = 'loads';", 'default tab'],
         ["box.style.display = (ROLE === 'staff') ? 'none' : 'flex';", "box.style.display = 'none';", 'company switcher'],

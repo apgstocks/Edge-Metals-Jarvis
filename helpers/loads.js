@@ -667,7 +667,7 @@ async function renumberLoad(oldId, newId) {
 // `from`/`to` are optional 'YYYY-MM-DD' strings (inclusive) — a load with no
 // date is excluded whenever a filter is active (can't place it in range),
 // but included when no filter is applied at all.
-function getInventoryReport(allLoads, { from, to, periodStock = false } = {}) {
+function getInventoryReport(allLoads, { from, to, periodStock = false, metalSplit = false } = {}) {
     const { groupItemsByDescription } = require('./pdf');
     const filtered = (from || to)
         ? allLoads.filter(l => l.date && (!from || l.date >= from) && (!to || l.date <= to))
@@ -874,6 +874,42 @@ function getInventoryReport(allLoads, { from, to, periodStock = false } = {}) {
         }
     }
 
+    // ── FERROUS / NON-FERROUS SPLIT (2026-11-20, website Inventory only) ─────────────────────────────────
+    // Apsara: "Ferrous / non-ferrous split in reports ... per day already there, just do Fe / Non Fe thing".
+    // The type is learned per item NAME (helpers/itemMetal.js), so every row, and every day, is classified by the
+    // same map the Item maintenance screen edits. A name nobody has answered for is "unsorted" and is its own
+    // line, never folded into ferrous. OFF by default: the phone app, the PDF / Excel exports, the nightly PDF
+    // and Scout call this without the flag and get exactly what they got before (CLAUDE.md rule 1).
+    let byMetal;
+    let metalByKey = null;
+    if (metalSplit) {
+        const IM = require('./itemMetal');
+        metalByKey = new Map();
+        byType = byType.map((g) => {
+            let m = IM.typeOf(g.description);
+            // a confirmed alias row takes the type its other spellings agree on, when the label itself has none
+            if (!m && Array.isArray(g.also_known_as)) {
+                const ts = new Set(g.also_known_as.map((n) => IM.typeOf(n)).filter(Boolean));
+                if (ts.size === 1) m = [...ts][0];
+            }
+            const metal = m || 'unsorted';
+            metalByKey.set(IM.keyOf(g.description), metal);
+            for (const n of (g.also_known_as || [])) if (!metalByKey.has(IM.keyOf(n))) metalByKey.set(IM.keyOf(n), metal);
+            return { ...g, metal };
+        });
+        const blank = () => ({ rows: 0, net: 0, amount: 0, shipped: 0, onHand: 0 });
+        byMetal = { ferrous: blank(), 'non-ferrous': blank(), unsorted: blank() };
+        for (const g of byType) {
+            const t = byMetal[g.metal];
+            t.rows += 1;
+            t.net += g.net || 0;
+            t.amount += g.amount || 0;
+            t.shipped += g.shipped || 0;
+            t.onHand += g.onHand || 0;
+        }
+        for (const k of Object.keys(byMetal)) for (const f of ['net', 'amount', 'shipped', 'onHand']) byMetal[k][f] = round2(byMetal[k][f]);
+    }
+
     const dayMap = new Map();
     for (const l of filtered) {
         const key = l.date || 'Unknown date';
@@ -891,6 +927,25 @@ function getInventoryReport(allLoads, { from, to, periodStock = false } = {}) {
     const byDay = Array.from(dayMap.values())
         .map(d => ({ ...d, net: round2(d.net), amount: round2(d.amount) }))
         .sort((a, b) => (a.date < b.date ? 1 : -1));
+    // Per-day Fe / Non-Fe (metalSplit only): net weight of each day's item lines by type, same classification as the rows
+    if (metalSplit) {
+        const IM = require('./itemMetal');
+        const perDay = new Map();
+        for (const l of filtered) {
+            const key = l.date || 'Unknown date';
+            if (!perDay.has(key)) perDay.set(key, { ferrous: 0, 'non-ferrous': 0, unsorted: 0 });
+            const d = perDay.get(key);
+            for (const it of (Array.isArray(l.items) ? l.items : [])) {
+                const k = IM.keyOf(it && it.description ? String(it.description).trim() : 'Other');
+                const m = metalByKey.get(k) || IM.typeOf(it && it.description) || 'unsorted';
+                d[m] += Number(it && it.net_weight) || 0;
+            }
+        }
+        for (const d of byDay) {
+            const m = perDay.get(d.date) || { ferrous: 0, 'non-ferrous': 0, unsorted: 0 };
+            d.metal = { ferrous: round2(m.ferrous), 'non-ferrous': round2(m['non-ferrous']), unsorted: round2(m.unsorted) };
+        }
+    }
 
     // Grouped by SELLER — per Apsara 2026-08-15 ("group by seller as well so
     // that we will know how much we bought overall from that seller").
@@ -959,6 +1014,8 @@ function getInventoryReport(allLoads, { from, to, periodStock = false } = {}) {
         byType,
         byDay,
         bySeller,
+        // only when asked for (website Inventory): every row carries .metal, byDay rows carry .metal, and byMetal totals
+        ...(metalSplit ? { metalAvailable: true, byMetal } : {}),
     };
 }
 

@@ -1048,9 +1048,13 @@ async function renderPettyCashTab({ refresh = true } = {}) {
       })}
       <!-- Her words: "Keep this borrowing tracking in petty cash as a tab
            inside petty cash." Two sub-tabs, same pattern as Bills. -->
+      <!-- WHICH TAB IS OPEN, VISIBLY (2026-11-20). Apsara: "Selected one should be highlighted na". The open tab
+           used to get --surface-raised, nearly the page colour, while the other had NO background at all — so the
+           browser painted its own light-grey button and the CLOSED tab looked selected. Now the open one is solid
+           green like the page's primary button, the other a plain outlined one, and aria-pressed says the same. -->
       <div style="display:flex; gap:6px; margin-bottom:16px;">
-        <button class="btn petty-tab" data-petty-tab="cash" style="font-size:12px; padding:6px 14px;${pettyTab === 'cash' ? ' background:var(--surface-raised); color:var(--text-strong);' : ''}">Cash</button>
-        <button class="btn petty-tab" data-petty-tab="borrowing" style="font-size:12px; padding:6px 14px;${pettyTab === 'borrowing' ? ' background:var(--surface-raised); color:var(--text-strong);' : ''}">Borrowing${(pettyCash.borrowings || []).length ? ` (${(pettyCash.borrowings || []).length})` : ''}</button>
+        <button class="btn petty-tab ${pettyTab === 'cash' ? 'btn-primary' : 'btn-secondary'}" data-petty-tab="cash" aria-pressed="${pettyTab === 'cash'}" style="font-size:12px; padding:6px 14px;">Cash</button>
+        <button class="btn petty-tab ${pettyTab === 'borrowing' ? 'btn-primary' : 'btn-secondary'}" data-petty-tab="borrowing" aria-pressed="${pettyTab === 'borrowing'}" style="font-size:12px; padding:6px 14px;">Borrowing${(pettyCash.borrowings || []).length ? ` (${(pettyCash.borrowings || []).length})` : ''}</button>
       </div>
       ${pettyTab === 'borrowing' ? pettyBorrowingHtml(isAdmin) : `
       <!-- ── EACH ACCOUNT, GROUPED UNDER ITS BANK ───────────────────────
@@ -1091,18 +1095,25 @@ async function renderPettyCashTab({ refresh = true } = {}) {
             const label = src;
             // The company sub-label is dropped: every account is named for
             // its company, so it printed the same words twice.
-            return `<div style="flex:1 1 0; min-width:0;">
-              <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--text-muted);">${esc(label)}</div>
+            return `<div style="width:150px; flex:0 0 150px; min-width:0;">
+              <div style="font-family:var(--font-mono); font-size:10px; letter-spacing:.09em; text-transform:uppercase; color:var(--text-muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${esc(label)}</div>
               <div style="font-size:13px; color:var(--text-strong);">${esc(fmtAmount(Number((pettyCash.by_source || {})[src]) || 0))}</div>
             </div>`;
           };
           // A bank heading above a single account says the account's own name
           // twice — "No bank behind it" sat directly above "Unassigned".
+          //
+          // ── ONE HEADING ROW FOR EVERY GROUP (2026-11-20) ─────────────────
+          // Apsara, on this card: "alignment is ugly". The heading sat only over BofA, so its two accounts started a
+          // row lower than Chase Bank and Unassigned and no label or figure lined up. Every group now has a heading
+          // row of the same height — BofA's with its name and a rule spanning its accounts, the others empty — so
+          // all labels share one line and all figures another, and every account is the same width.
+          const HEAD = 'height:18px; margin-bottom:6px; font-size:11.5px; font-weight:700; color:var(--text-strong); white-space:nowrap;';
           return banks.map((g) => (g.items.length < 2
-            ? `<div style="min-width:132px;">${cell(g.items[0])}</div>`
-            : `<div style="min-width:280px;">
-              <div style="font-size:11.5px; font-weight:700; color:var(--text-strong); margin-bottom:6px;">${esc(g.bank)}</div>
-              <div style="display:flex; gap:16px; align-items:flex-start;">${g.items.map(cell).join('')}</div>
+            ? `<div><div style="${HEAD}" aria-hidden="true"></div>${cell(g.items[0])}</div>`
+            : `<div>
+              <div style="${HEAD} border-bottom:1px solid var(--border-subtle); padding-bottom:2px;">${esc(g.bank)}</div>
+              <div style="display:flex; gap:28px; align-items:flex-start;">${g.items.map(cell).join('')}</div>
             </div>`)).join('');
         })()}
       </div>

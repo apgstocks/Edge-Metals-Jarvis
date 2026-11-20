@@ -81,6 +81,10 @@ const DAY = 86400000, NOW = Date.now();
         r2.on('error', reject); if (data) r2.write(data); r2.end(); });
     const login = async (pw) => ((await req('POST', '/login', { body: { password: pw } })).json || {}).sid;
     const adminSid = await login(process.env.ADMIN_PASSWORD), userSid = await login(process.env.APP_PASSWORD);
+    // Re-measured AFTER signing in (2026-11-20). A sign-in is now written to the change log on purpose — Apsara:
+    // every operation logged — so it is not a read, and leaving it inside the window made this check fail for a
+    // reason unrelated to its name. What it proves is unchanged: the case-file routes and command write nothing.
+    before = snap();
     ck('a non-admin is refused', (await req('GET', '/api/case-files', { sid: userSid })).status === 403 && (await req('GET', '/api/case-files/one?customer=Lotte', { sid: userSid })).status === 403);
     const list = await req('GET', '/api/case-files', { sid: adminSid });
     ck('the list route returns one status per customer, without the heavy timelines', list.status === 200 && list.json.count === 4 && list.json.cases.every((c) => c.status && !('events' in c) && typeof c.event_count === 'number'), JSON.stringify(list.json).slice(0, 200));

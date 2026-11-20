@@ -406,6 +406,13 @@ function createApi() {
         },
     }));
 
+    // ── CHANGE LOG (2026-11-20) ───────────────────────────────────────────
+    // Apsara: "For each and every operation, we need to have audit log right?" — yard first, manager only.
+    // Mounted HERE, right after the body is parsed and before /login and every route, so it sees the sign-in too.
+    // It never changes a request or a response, and writes after the response has gone; the list of what counts
+    // is helpers/changeLogMiddleware.js, the store is helpers/changeLog.js.
+    app.use(require('./helpers/changeLogMiddleware').middleware());
+
     // ── GZIP ──────────────────────────────────────────────────────────────
     // Apsara, 2026-09-19: "When i click Bill,it takes like 5 seconds to load
     // it.Latency is something which i dont want".

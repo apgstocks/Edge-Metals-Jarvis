@@ -106,7 +106,8 @@ module.exports = function (app, ctx) {
         try {
             const { loadLoads, getInventoryReport } = require('./helpers/loads');
             // ?stock=period — sent only by the website's Inventory tab (2026-11-20); every other caller unchanged
-            res.json(getInventoryReport(loadLoads(), { from: req.query.from, to: req.query.to, periodStock: req.query.stock === 'period' }));
+            // ?split=metal — likewise sent only by the website's Inventory tab (2026-11-20): Ferrous / Non-ferrous / Unsorted
+            res.json(getInventoryReport(loadLoads(), { from: req.query.from, to: req.query.to, periodStock: req.query.stock === 'period', metalSplit: req.query.split === 'metal' }));
         } catch (e) { res.status(500).json({ error: e.message }); }
     });
 

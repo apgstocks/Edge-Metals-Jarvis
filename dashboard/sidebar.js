@@ -46,6 +46,7 @@
     { id: 'spend', label: 'Spend Report', group: 'Both companies', adminOnly: true },
     { id: 'contacts', label: 'Price Lists', group: 'Edge Yard', adminOnly: true },
     { id: 'outbound-loads', label: 'Outbound Loads', group: 'Edge Yard', adminOnly: true },
+    { id: 'audit', label: 'Audit Log', group: 'Edge Yard', adminOnly: true },
     { id: 'board', label: 'Board', group: 'Edge Metals' },
     { id: 'bookings', label: 'Bookings', group: 'Edge Metals' },
     { id: 'partners', label: 'Truckers & Suppliers', group: 'Edge Metals' },
@@ -105,7 +106,7 @@
     documents: '/documents', 'edge-inventory': '/edge-inventory',
     // The portal's default tab. accounting.js carries the rest.
     accounting: '/workspace',
-    claims: '/claims', 'design-bol': '/design/bol', 'ai-usage': '/ai-usage',
+    claims: '/claims', 'design-bol': '/design/bol', 'ai-usage': '/ai-usage', audit: '/audit',
     health: '/health-report',
   };
   const STAFF_TABS = ['loads', 'petty', 'trucker-bills'];

@@ -106,7 +106,10 @@ for (const m of INDEX.matchAll(/if \(b\.dataset\.tab === '([a-z-]+)'\) \{ window
 // immediately". They are one row, 'accounting', whose href is the portal's
 // first tab; dashboard/accounting.js moves between the four pages, which are
 // unchanged and still at their own URLs. 13 - 4 + 1 = 10.
-ck('index.html has its ten standalone pages', Object.keys(APP_HREF).length === 10, JSON.stringify(APP_HREF));
+// ── ELEVEN (2026-11-20) ──────────────────────────────────────────────────
+// The Audit log (/audit) — Apsara: every operation logged, "Yard first", "Manager only". Registered in both
+// nav lists and served with the rail, which is exactly what this count is here to make someone check.
+ck('index.html has its eleven standalone pages', Object.keys(APP_HREF).length === 11, JSON.stringify(APP_HREF));
 ck('the same pages, to the same addresses', JSON.stringify(Object.entries(APP_HREF).sort()) === JSON.stringify(Object.entries(L.PAGE_HREF).sort()),
    JSON.stringify(L.PAGE_HREF));
 const staffSrc = (INDEX.match(/ROLE !== 'staff' \|\| n\.id === 'loads' \|\| n\.id === 'petty' \|\| n\.id === 'trucker-bills'/) || [])[0];
